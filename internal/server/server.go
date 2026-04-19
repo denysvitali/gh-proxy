@@ -83,7 +83,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// and callers (e.g. go-github) rely on receiving that 302 verbatim.
 	forwardClient := &http.Client{
 		Timeout: 30 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
