@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,12 +41,12 @@ const claimsKey ctxKey = "claims"
 
 func (d Deps) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		h := c.GetHeader("Authorization")
-		if !strings.HasPrefix(h, "Bearer ") {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+		tok, ok := extractToken(c.GetHeader("Authorization"))
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer or basic token"})
 			return
 		}
-		claims, err := d.Tokens.Verify(strings.TrimPrefix(h, "Bearer "))
+		claims, err := d.Tokens.Verify(tok)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
@@ -53,6 +54,42 @@ func (d Deps) authMiddleware() gin.HandlerFunc {
 		c.Set(string(claimsKey), claims)
 		c.Next()
 	}
+}
+
+// extractToken returns the "<id>.<secret>" token carried by the Authorization
+// header. Bearer is preferred. Basic is supported for Git over HTTP, which
+// turns `https://<user>:<pass>@host/…` into `Authorization: Basic …` and has
+// no native way to send a Bearer.
+//
+// Basic decoding rules:
+//   - If the username already contains a ".", the username is taken as the
+//     full token (this is what Git produces from `https://<id>.<secret>@host`).
+//   - Otherwise the token is reconstructed as `<user>.<pass>`, letting
+//     credential helpers store the consumer id and secret in the canonical
+//     user/password fields.
+func extractToken(h string) (string, bool) {
+	switch {
+	case strings.HasPrefix(h, "Bearer "):
+		t := strings.TrimPrefix(h, "Bearer ")
+		return t, t != ""
+	case strings.HasPrefix(h, "Basic "):
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(h, "Basic "))
+		if err != nil {
+			return "", false
+		}
+		user, pass, ok := strings.Cut(string(raw), ":")
+		if !ok || user == "" {
+			return "", false
+		}
+		if strings.Contains(user, ".") {
+			return user, true
+		}
+		if pass == "" {
+			return "", false
+		}
+		return user + "." + pass, true
+	}
+	return "", false
 }
 
 func (d Deps) gitProxy(c *gin.Context) {
