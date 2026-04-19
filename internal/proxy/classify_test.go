@@ -10,10 +10,10 @@ import (
 
 func TestClassifyAPI(t *testing.T) {
 	cases := map[string]policy.EndpointClass{
-		"/actions/runs":      policy.EndpointWorkflows,
-		"/pulls/42":          policy.EndpointPullRequest,
-		"/git/refs/heads/m":  policy.EndpointRefs,
-		"/contents/README":   policy.EndpointRefs,
+		"/actions/runs":     policy.EndpointWorkflows,
+		"/pulls/42":         policy.EndpointPullRequest,
+		"/git/refs/heads/m": policy.EndpointRefs,
+		"/contents/README":  policy.EndpointRefs,
 	}
 	for in, want := range cases {
 		if got := classifyAPI(in); got != want {

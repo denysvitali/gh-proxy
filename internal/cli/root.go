@@ -28,7 +28,7 @@ func NewRootCmd() *cobra.Command {
 	serveCmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the proxy HTTP server",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			v := viper.New()
 			if cfgFile != "" {
 				v.SetConfigFile(cfgFile)
@@ -68,7 +68,7 @@ func NewRootCmd() *cobra.Command {
 		Use:   "validate-policy [file]",
 		Short: "Validate a policy YAML document",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, args []string) error {
 			b, err := os.ReadFile(args[0])
 			if err != nil {
 				return err

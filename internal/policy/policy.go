@@ -33,9 +33,9 @@ const (
 
 // Document is the on-disk policy schema (one YAML file).
 type Document struct {
-	Version   int         `yaml:"version"`
-	Tenants   []Tenant    `yaml:"tenants"`
-	Consumers []Consumer  `yaml:"consumers"`
+	Version   int        `yaml:"version"`
+	Tenants   []Tenant   `yaml:"tenants"`
+	Consumers []Consumer `yaml:"consumers"`
 }
 
 // Tenant groups a GitHub App installation with its repo rules.
