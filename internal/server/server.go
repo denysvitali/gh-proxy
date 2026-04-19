@@ -14,7 +14,9 @@ import (
 	"github.com/kaiko-ai/gh-proxy/internal/ghapp"
 	"github.com/kaiko-ai/gh-proxy/internal/policy"
 	"github.com/kaiko-ai/gh-proxy/internal/proxy"
+	"github.com/kaiko-ai/gh-proxy/internal/telemetry"
 	"github.com/kaiko-ai/gh-proxy/internal/token"
+	"github.com/kaiko-ai/gh-proxy/internal/webhook"
 )
 
 // Server wraps the HTTP server and its collaborators.
@@ -22,7 +24,24 @@ type Server struct {
 	cfg    *config.Config
 	log    *logrus.Logger
 	engine *policy.Engine
+	gh     *ghapp.Client
+	tele   *telemetry.Providers
 	http   *http.Server
+}
+
+// policyReloader adapts the config layer to webhook.PolicyReloader.
+type policyReloader struct {
+	path   string
+	engine *policy.Engine
+}
+
+func (p *policyReloader) Reload() error {
+	doc, err := config.ReadPolicyFile(p.path)
+	if err != nil {
+		return err
+	}
+	p.engine.Replace(doc)
+	return nil
 }
 
 // New constructs a Server from config.
@@ -47,9 +66,24 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 		gh = c
 	}
 
+	tele, err := telemetry.Setup(context.Background(), cfg.OTelEndpoint, "gh-proxy")
+	if err != nil {
+		return nil, err
+	}
+
 	r := gin.New()
-	r.Use(gin.Recovery(), requestLogger(log))
+	r.Use(gin.Recovery(), requestLogger(log), tele.Middleware())
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
+
+	var upstream *proxy.UpstreamAuth
+	if !cfg.Upstream.Disabled {
+		upstream = &proxy.UpstreamAuth{
+			Header:         cfg.Upstream.Header,
+			ExpectedPrefix: cfg.Upstream.ExpectedPrefix,
+			SharedToken:    cfg.Upstream.SharedToken,
+			TokenHeader:    cfg.Upstream.TokenHeader,
+		}
+	}
 
 	proxy.Register(r, proxy.Deps{
 		Engine:     engine,
@@ -57,12 +91,27 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 		GitHubApp:  gh,
 		APIBaseURL: cfg.GitHub.APIBaseURL,
 		GitBaseURL: "https://github.com",
-	})
+	}, upstream)
+
+	if cfg.WebhookSecret != "" {
+		wh := &webhook.Handler{
+			Secret:   []byte(cfg.WebhookSecret),
+			Inval:    gh, // *ghapp.Client satisfies Invalidator; nil-safe via optional iface check below
+			Reloader: &policyReloader{path: cfg.PolicyPath, engine: engine},
+			Log:      log,
+		}
+		if gh == nil {
+			wh.Inval = nil
+		}
+		wh.Register(r)
+	}
 
 	return &Server{
 		cfg:    cfg,
 		log:    log,
 		engine: engine,
+		gh:     gh,
+		tele:   tele,
 		http:   &http.Server{Addr: cfg.ListenAddr, Handler: r, ReadHeaderTimeout: 10 * time.Second},
 	}, nil
 }
@@ -82,6 +131,7 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		_ = s.tele.Shutdown(shutdown)
 		return s.http.Shutdown(shutdown)
 	case err := <-errCh:
 		return err

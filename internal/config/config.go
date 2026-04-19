@@ -25,6 +25,24 @@ type Config struct {
 
 	// GitHub describes how to authenticate as a GitHub App.
 	GitHub GitHubAppConfig `mapstructure:"github"`
+
+	// OTel endpoint for OTLP/HTTP export (optional).
+	OTelEndpoint string `mapstructure:"otel_endpoint"`
+
+	// WebhookSecret validates GitHub webhook deliveries (optional).
+	WebhookSecret string `mapstructure:"webhook_secret"`
+
+	// Upstream configures the guard in front of /v1/tokens.
+	Upstream UpstreamAuthConfig `mapstructure:"upstream"`
+}
+
+// UpstreamAuthConfig configures the /v1/tokens guard.
+type UpstreamAuthConfig struct {
+	Header         string `mapstructure:"header"`
+	ExpectedPrefix string `mapstructure:"expected_prefix"`
+	SharedToken    string `mapstructure:"shared_token"`
+	TokenHeader    string `mapstructure:"token_header"`
+	Disabled       bool   `mapstructure:"disabled"` // opt-out, for dev only
 }
 
 // GitHubAppConfig holds GitHub App credentials.
@@ -53,6 +71,9 @@ func Load(v *viper.Viper) (*Config, error) {
 	}
 	if c.TokenSigningKey == "" {
 		return nil, fmt.Errorf("token_signing_key is required")
+	}
+	if !c.Upstream.Disabled && c.Upstream.Header == "" && c.Upstream.SharedToken == "" {
+		return nil, fmt.Errorf("upstream auth is required: set upstream.header, upstream.shared_token, or upstream.disabled=true")
 	}
 	return &c, nil
 }

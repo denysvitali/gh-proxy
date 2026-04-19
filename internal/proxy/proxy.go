@@ -27,9 +27,14 @@ type Deps struct {
 	HTTPClient *http.Client
 }
 
-// Register attaches proxy routes to the router.
-func Register(r *gin.Engine, d Deps) {
-	r.POST("/v1/tokens", d.issueToken)
+// Register attaches proxy routes to the router. If upstream is non-nil its
+// middleware guards the token-issue endpoint.
+func Register(r *gin.Engine, d Deps, upstream *UpstreamAuth) {
+	tokens := r.Group("/v1")
+	if upstream != nil {
+		tokens.Use(upstream.Middleware())
+	}
+	tokens.POST("/tokens", d.issueToken)
 
 	authed := r.Group("/", d.authMiddleware())
 	authed.Any("/git/:org/:repo/*rest", d.gitProxy)
@@ -94,6 +99,9 @@ func (d Deps) gitProxy(c *gin.Context) {
 	if write {
 		endpoint = policy.EndpointGitWrite
 	}
+	c.Set("tenant", claims.Tenant)
+	c.Set("repo", org+"/"+repo)
+	c.Set("endpoint_class", string(endpoint))
 
 	if dec := d.Engine.Evaluate(policy.Request{
 		Tenant: claims.Tenant, Org: org, Repo: repo, Write: write, Endpoint: endpoint,
@@ -121,6 +129,9 @@ func (d Deps) apiProxy(c *gin.Context) {
 
 	endpoint := classifyAPI(rest)
 	write := c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead
+	c.Set("tenant", claims.Tenant)
+	c.Set("repo", org+"/"+repo)
+	c.Set("endpoint_class", string(endpoint))
 	if dec := d.Engine.Evaluate(policy.Request{
 		Tenant: claims.Tenant, Org: org, Repo: repo, Write: write, Endpoint: endpoint,
 	}); !dec.Allowed {
