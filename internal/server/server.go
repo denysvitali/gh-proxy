@@ -78,12 +78,23 @@ func New(cfg *config.Config) (*Server, error) {
 	r.Use(gin.Recovery(), requestLogger(), tele.Middleware())
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
+	// Transparent HTTP client: do not follow redirects. Upstream endpoints
+	// like /actions/runs/{id}/logs return a 302 to a presigned blob URL,
+	// and callers (e.g. go-github) rely on receiving that 302 verbatim.
+	forwardClient := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
 	proxy.Register(r, proxy.Deps{
 		Engine:     engine,
 		Tokens:     verifier,
 		GitHubApp:  gh,
 		APIBaseURL: cfg.GitHub.APIBaseURL,
 		GitBaseURL: "https://github.com",
+		HTTPClient: forwardClient,
 	})
 
 	if cfg.WebhookSecret != "" {
