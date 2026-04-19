@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -12,26 +13,41 @@ import (
 	"github.com/denysvitali/gh-proxy/internal/policy"
 )
 
-// configKeys lists every mapstructure key the Config struct understands.
-// Viper's AutomaticEnv only binds env vars for keys it already knows about
-// (via defaults, flags, or explicit BindEnv); nested struct fields loaded
-// purely from YAML would otherwise be invisible to env overrides. See
-// https://github.com/spf13/viper/issues/761.
-var configKeys = []string{
-	"listen_addr",
-	"log_level",
-	"token_signing_key",
-	"policy_path",
-	"otel_endpoint",
-	"webhook_secret",
-	"github.app_id",
-	"github.private_key_path",
-	"github.api_base_url",
-	"upstream.header",
-	"upstream.expected_prefix",
-	"upstream.shared_token",
-	"upstream.token_header",
-	"upstream.disabled",
+// mapstructureKeys walks t and returns every dotted key reachable via
+// `mapstructure` tags. Used to BindEnv every config key so env overrides
+// work even when the key is absent from the config file — Viper's
+// AutomaticEnv alone does not do this (spf13/viper#761).
+func mapstructureKeys(t reflect.Type, prefix string) []string {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		if prefix == "" {
+			return nil
+		}
+		return []string{prefix}
+	}
+	var keys []string
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		tag := f.Tag.Get("mapstructure")
+		if tag == "-" {
+			continue
+		}
+		name := strings.Split(tag, ",")[0]
+		if name == "" {
+			name = strings.ToLower(f.Name)
+		}
+		key := name
+		if prefix != "" {
+			key = prefix + "." + name
+		}
+		keys = append(keys, mapstructureKeys(f.Type, key)...)
+	}
+	return keys
 }
 
 // Config is the top-level runtime config for gh-proxy.
@@ -86,7 +102,7 @@ func Load(v *viper.Viper) (*Config, error) {
 	// explicitly bind every key so env overrides work even when the key is
 	// absent from the config file.
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	for _, k := range configKeys {
+	for _, k := range mapstructureKeys(reflect.TypeOf(Config{}), "") {
 		_ = v.BindEnv(k)
 	}
 
