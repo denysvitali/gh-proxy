@@ -59,6 +59,9 @@ func (d Deps) authMiddleware() gin.HandlerFunc {
 				"reason":      reason,
 			}).Warn("auth: rejected")
 			c.Set("auth_reason", reason)
+			// Challenge the client so Git (and other HTTP clients) will retry
+			// with Basic credentials from their credential helper.
+			c.Header("WWW-Authenticate", `Basic realm="gh-proxy"`)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": reason})
 			return
 		}
