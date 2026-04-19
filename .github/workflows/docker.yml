@@ -10,7 +10,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/denysvitali/gh-proxy
+  IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
   build:
