@@ -34,7 +34,12 @@ func TestExpired(t *testing.T) {
 func TestTampered(t *testing.T) {
 	i := NewIssuer([]byte("secret"), time.Minute)
 	tok, _, _ := i.Issue("acme", "ci")
-	bad := tok[:len(tok)-1] + "A"
+	last := tok[len(tok)-1]
+	flip := byte('A')
+	if last == flip {
+		flip = 'B'
+	}
+	bad := tok[:len(tok)-1] + string(flip)
 	if _, err := i.Verify(bad); err == nil {
 		t.Fatal("expected bad signature")
 	}
