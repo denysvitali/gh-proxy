@@ -55,7 +55,7 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 		engine.Replace(doc)
 	}
 
-	issuer := token.NewIssuer([]byte(cfg.TokenSigningKey), 15*time.Minute)
+	verifier := token.NewVerifier(engine)
 
 	var gh *ghapp.Client
 	if cfg.GitHub.AppID != 0 {
@@ -75,23 +75,13 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 	r.Use(gin.Recovery(), requestLogger(log), tele.Middleware())
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
-	var upstream *proxy.UpstreamAuth
-	if !cfg.Upstream.Disabled {
-		upstream = &proxy.UpstreamAuth{
-			Header:         cfg.Upstream.Header,
-			ExpectedPrefix: cfg.Upstream.ExpectedPrefix,
-			SharedToken:    cfg.Upstream.SharedToken,
-			TokenHeader:    cfg.Upstream.TokenHeader,
-		}
-	}
-
 	proxy.Register(r, proxy.Deps{
 		Engine:     engine,
-		Tokens:     issuer,
+		Tokens:     verifier,
 		GitHubApp:  gh,
 		APIBaseURL: cfg.GitHub.APIBaseURL,
 		GitBaseURL: "https://github.com",
-	}, upstream)
+	})
 
 	if cfg.WebhookSecret != "" {
 		wh := &webhook.Handler{

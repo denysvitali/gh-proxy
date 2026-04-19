@@ -13,3 +13,7 @@ tenants:
 consumers:
   - id: ci-runner
     tenant: acme
+    # Generate with: gh-proxy hash-token --consumer ci-runner
+    # The caller presents the full token "<id>.<secret>" as a Bearer token.
+    token_hashes:
+      - "$2a$10$REPLACE_ME_WITH_BCRYPT_HASH_OF_THE_SECRET"

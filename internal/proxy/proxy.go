@@ -20,51 +20,18 @@ import (
 // Deps bundles the collaborators needed by handlers.
 type Deps struct {
 	Engine     *policy.Engine
-	Tokens     *token.Issuer
+	Tokens     *token.Verifier
 	GitHubApp  *ghapp.Client
 	APIBaseURL string
 	GitBaseURL string // e.g. https://github.com
 	HTTPClient *http.Client
 }
 
-// Register attaches proxy routes to the router. If upstream is non-nil its
-// middleware guards the token-issue endpoint.
-func Register(r *gin.Engine, d Deps, upstream *UpstreamAuth) {
-	tokens := r.Group("/v1")
-	if upstream != nil {
-		tokens.Use(upstream.Middleware())
-	}
-	tokens.POST("/tokens", d.issueToken)
-
+// Register attaches proxy routes to the router.
+func Register(r *gin.Engine, d Deps) {
 	authed := r.Group("/", d.authMiddleware())
 	authed.Any("/git/:org/:repo/*rest", d.gitProxy)
 	authed.Any("/api/repos/:org/:repo/*rest", d.apiProxy)
-}
-
-type issueReq struct {
-	Tenant   string `json:"tenant" binding:"required"`
-	Consumer string `json:"consumer" binding:"required"`
-}
-
-func (d Deps) issueToken(c *gin.Context) {
-	// NOTE: authentication of the identity requesting a token is expected to
-	// be handled by an upstream mechanism (mTLS, OIDC, k8s SA token). This
-	// endpoint assumes that upstream check succeeded.
-	var req issueReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if _, ok := d.Engine.Tenant(req.Tenant); !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "unknown tenant"})
-		return
-	}
-	tok, claims, err := d.Tokens.Issue(req.Tenant, req.Consumer)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"token": tok, "expires_at": claims.Expiry})
 }
 
 type ctxKey string

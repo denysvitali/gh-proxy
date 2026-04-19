@@ -65,26 +65,29 @@ bound staleness.
 | Policy file missing at boot | serve fails fast |
 | Policy file invalid on reload | keep previous doc, log error |
 | GitHub App token fetch fails | 502 to consumer, no cache poisoning |
-| Consumer token expired | 401, consumer must re-issue |
-| Tenant mismatch in token | 401 |
+| Consumer token fails bcrypt compare | 401 |
+| Consumer id not in policy | 401 |
 | Endpoint not modeled | 403 (default-deny on unknown classes) |
 
 ## Revocation semantics
 
-- Consumer tokens are short-lived; revocation is achieved by rotating the
-  signing key (Secret) and letting tokens expire.
+- Consumer tokens are static. Revocation = remove the consumer's token hash
+  from the policy document (or remove the consumer entirely). The change
+  takes effect on the next policy reload.
+- Rotation = add a new hash, distribute the new token, then remove the old
+  hash. Multiple hashes per consumer enable overlap during rotation.
 - Installation-level revocation is driven by webhooks or by restart.
 - Per-consumer blocklists are out of scope in v1.
 
 ## Security assumptions / threat model
 
 - The network between consumers and the proxy is trusted enough that
-  short-lived bearer tokens over TLS are acceptable.
-- Upstream authentication (who may call `/v1/tokens`) is enforced outside
-  gh-proxy (mTLS, OIDC proxy, SA projection). gh-proxy treats `/v1/tokens`
-  callers as already authenticated at the transport layer.
-- Kubernetes Secrets protect the GitHub App private key and HMAC signing key
-  at rest and in transit within the cluster.
+  long-lived bearer tokens over TLS are acceptable. If you need time-bounded
+  credentials, mint fresh tokens and rotate via policy reload.
+- Only bcrypt *hashes* of token secrets are stored in the policy document.
+  A compromised ConfigMap does not leak usable credentials.
+- Kubernetes Secrets protect the GitHub App private key at rest and in
+  transit within the cluster.
 - The proxy is **not** a general-purpose GitHub proxy: only classified
   endpoint classes are forwarded. Everything else is 403.
 - Path-level Git authorization (per-branch, per-file) is explicitly out of

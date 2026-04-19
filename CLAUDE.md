@@ -17,17 +17,17 @@ Release/CI: GoReleaser (`.goreleaser.yaml`) publishes binaries and a Docker imag
 
 ## Architecture
 
-gh-proxy is a stateless, Kubernetes-first HTTP service that brokers Git smart-HTTP and a curated subset of the GitHub API between internal consumers and GitHub App installations. Consumers never see GitHub credentials — they hold short-lived HMAC-signed tokens minted by the proxy; the proxy exchanges its App JWT for installation tokens and forwards allowed requests upstream.
+gh-proxy is a stateless, Kubernetes-first HTTP service that brokers Git smart-HTTP and a curated subset of the GitHub API between internal consumers and GitHub App installations. Consumers never see GitHub credentials — they authenticate with static bearer tokens of the form `<consumer-id>.<secret>` whose secret is bcrypt-hashed under `consumers[].token_hashes` in the policy document; the proxy exchanges its App JWT for installation tokens and forwards allowed requests upstream.
 
 Read `ARCHITECTURE.md` and `DESIGN.md` before making non-trivial changes — they define the trust boundaries and authorization model that the code implements.
 
 ### Package layout (`internal/`)
 
-- `cli` / `cmd/gh-proxy` — Cobra entrypoints (`serve`, `validate-policy`). Viper loads YAML + `GH_PROXY_*` env vars.
+- `cli` / `cmd/gh-proxy` — Cobra entrypoints (`serve`, `validate-policy`, `hash-token`). Viper loads YAML + `GH_PROXY_*` env vars.
 - `server` — Gin HTTP server wiring: middleware, route mounts, health.
-- `proxy` — data plane. Classifies the request into an endpoint class (`git.read`, `git.write`, `actions.workflows`, `api.refs`, `api.pulls`, `*`), consults policy, rewrites to `github.com`/`api.github.com`, and streams the response. `upstream_auth.go` is the installation-token injection guard.
+- `proxy` — data plane. Classifies the request into an endpoint class (`git.read`, `git.write`, `actions.workflows`, `api.refs`, `api.pulls`, `*`), consults policy, rewrites to `github.com`/`api.github.com`, and streams the response.
 - `policy` — parses the policy document and evaluates `(tenant, org, repo, endpoint, write?)`. RW-lock protected so ConfigMap hot-swaps are safe. Resolution is exact-repo first, then `*` fallback.
-- `token` — HMAC-SHA256 consumer tokens (default TTL 15m). Issued by `POST /v1/tokens`; verified on every data-plane request.
+- `token` — static bearer-token verifier. Parses `<consumer-id>.<secret>`, looks the consumer up via `policy.Engine.Consumer`, and bcrypt-compares the secret against `token_hashes`.
 - `ghapp` — GitHub App JWT → installation token exchange with an in-memory cache (evicted ~1m before expiry).
 - `webhook` — optional receiver for installation sync / revocation / cache invalidation.
 - `telemetry` — OpenTelemetry traces + metrics middleware; spans are labeled with `tenant`, `repo`, `endpoint`.
@@ -37,7 +37,6 @@ Read `ARCHITECTURE.md` and `DESIGN.md` before making non-trivial changes — the
 
 - **Default deny**: unknown endpoint classes return 403. Authorization requires *both* repo-level access (`read`/`write`) and an explicit endpoint-class match.
 - **Stateless**: no database. Only in-memory caches (installation tokens, compiled policy). Do not introduce persistent state without updating `DESIGN.md`.
-- **Upstream auth for `/v1/tokens`** is assumed to be enforced outside the proxy (mTLS/OIDC/SA). The handler treats callers as already authenticated at the transport layer.
 - **Out of scope**: path/branch-level Git authorization, per-consumer blocklists, general-purpose GitHub proxying.
 
 ## Conventions

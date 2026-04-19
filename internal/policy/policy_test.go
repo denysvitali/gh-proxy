@@ -15,7 +15,7 @@ func baseDoc() *Document {
 				{Name: "locked", Access: AccessNone},
 			},
 		}},
-		Consumers: []Consumer{{ID: "ci", Tenant: "acme"}},
+		Consumers: []Consumer{{ID: "ci", Tenant: "acme", TokenHashes: []string{"$2a$10$dummy"}}},
 	}
 }
 

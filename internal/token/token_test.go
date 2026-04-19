@@ -2,54 +2,64 @@ package token
 
 import (
 	"testing"
-	"time"
+
+	"github.com/denysvitali/gh-proxy/internal/policy"
 )
 
-func TestRoundTrip(t *testing.T) {
-	i := NewIssuer([]byte("secret"), time.Minute)
-	tok, _, err := i.Issue("acme", "ci")
+type fakeLookup map[string]*policy.Consumer
+
+func (f fakeLookup) Consumer(id string) (*policy.Consumer, bool) {
+	c, ok := f[id]
+	return c, ok
+}
+
+func TestVerifyRoundTrip(t *testing.T) {
+	h, err := Hash("s3cret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := i.Verify(tok)
+	v := NewVerifier(fakeLookup{"ci": {ID: "ci", Tenant: "acme", TokenHashes: []string{h}}})
+	claims, err := v.Verify("ci.s3cret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Tenant != "acme" || c.Consumer != "ci" {
-		t.Fatalf("unexpected claims: %+v", c)
+	if claims.Tenant != "acme" || claims.Consumer != "ci" {
+		t.Fatalf("unexpected claims: %+v", claims)
 	}
 }
 
-func TestExpired(t *testing.T) {
-	i := NewIssuer([]byte("secret"), time.Minute)
-	fixed := time.Unix(1_700_000_000, 0)
-	i.now = func() time.Time { return fixed }
-	tok, _, _ := i.Issue("acme", "ci")
-	i.now = func() time.Time { return fixed.Add(2 * time.Minute) }
-	if _, err := i.Verify(tok); err == nil {
-		t.Fatal("expected expiry error")
+func TestVerifyMalformed(t *testing.T) {
+	v := NewVerifier(fakeLookup{})
+	for _, tok := range []string{"", "nodot", ".", "ci.", ".secret"} {
+		if _, err := v.Verify(tok); err == nil {
+			t.Fatalf("%q: expected error", tok)
+		}
 	}
 }
 
-func TestTampered(t *testing.T) {
-	i := NewIssuer([]byte("secret"), time.Minute)
-	tok, _, _ := i.Issue("acme", "ci")
-	last := tok[len(tok)-1]
-	flip := byte('A')
-	if last == flip {
-		flip = 'B'
-	}
-	bad := tok[:len(tok)-1] + string(flip)
-	if _, err := i.Verify(bad); err == nil {
-		t.Fatal("expected bad signature")
+func TestVerifyUnknownConsumer(t *testing.T) {
+	v := NewVerifier(fakeLookup{})
+	if _, err := v.Verify("ghost.sec"); err != ErrUnknownConsumer {
+		t.Fatalf("got %v want ErrUnknownConsumer", err)
 	}
 }
 
-func TestWrongKey(t *testing.T) {
-	a := NewIssuer([]byte("k1"), time.Minute)
-	b := NewIssuer([]byte("k2"), time.Minute)
-	tok, _, _ := a.Issue("acme", "ci")
-	if _, err := b.Verify(tok); err == nil {
-		t.Fatal("expected signature mismatch across keys")
+func TestVerifyBadSecret(t *testing.T) {
+	h, _ := Hash("right")
+	v := NewVerifier(fakeLookup{"ci": {ID: "ci", Tenant: "acme", TokenHashes: []string{h}}})
+	if _, err := v.Verify("ci.wrong"); err != ErrBadSecret {
+		t.Fatalf("got %v want ErrBadSecret", err)
+	}
+}
+
+func TestVerifyMultipleHashes(t *testing.T) {
+	h1, _ := Hash("old")
+	h2, _ := Hash("new")
+	v := NewVerifier(fakeLookup{"ci": {ID: "ci", Tenant: "acme", TokenHashes: []string{h1, h2}}})
+	if _, err := v.Verify("ci.new"); err != nil {
+		t.Fatalf("new secret: %v", err)
+	}
+	if _, err := v.Verify("ci.old"); err != nil {
+		t.Fatalf("old secret: %v", err)
 	}
 }

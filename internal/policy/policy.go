@@ -55,11 +55,15 @@ type Repo struct {
 	Endpoints []EndpointClass `yaml:"endpoints"`
 }
 
-// Consumer is an identity that may be issued a token. In v1 consumers are
-// bound to a single tenant.
+// Consumer is an identity that authenticates with a static bearer token.
+// Consumers are bound to a single tenant and carry one or more bcrypt hashes
+// of the secret part of their token. The on-the-wire token has the form
+// "<id>.<secret>"; the proxy looks up the consumer by id and bcrypt-compares
+// the secret against TokenHashes.
 type Consumer struct {
-	ID     string `yaml:"id"`
-	Tenant string `yaml:"tenant"`
+	ID          string   `yaml:"id"`
+	Tenant      string   `yaml:"tenant"`
+	TokenHashes []string `yaml:"token_hashes"`
 }
 
 // Validate checks the document is internally consistent.
@@ -87,12 +91,41 @@ func (d *Document) Validate() error {
 			}
 		}
 	}
+	ids := make(map[string]struct{}, len(d.Consumers))
 	for _, c := range d.Consumers {
+		if c.ID == "" {
+			return fmt.Errorf("policy: consumer missing id")
+		}
+		if strings.Contains(c.ID, ".") {
+			return fmt.Errorf("policy: consumer id %q must not contain '.'", c.ID)
+		}
+		if _, dup := ids[c.ID]; dup {
+			return fmt.Errorf("policy: duplicate consumer %q", c.ID)
+		}
+		ids[c.ID] = struct{}{}
 		if _, ok := names[c.Tenant]; !ok {
 			return fmt.Errorf("policy: consumer %q references unknown tenant %q", c.ID, c.Tenant)
 		}
+		if len(c.TokenHashes) == 0 {
+			return fmt.Errorf("policy: consumer %q has no token_hashes", c.ID)
+		}
 	}
 	return nil
+}
+
+// Consumer looks up a consumer by ID.
+func (e *Engine) Consumer(id string) (*Consumer, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.doc == nil {
+		return nil, false
+	}
+	for i := range e.doc.Consumers {
+		if e.doc.Consumers[i].ID == id {
+			return &e.doc.Consumers[i], true
+		}
+	}
+	return nil, false
 }
 
 // Decision is the result of an authorization check.

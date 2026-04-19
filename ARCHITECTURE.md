@@ -5,7 +5,8 @@
 gh-proxy is a Kubernetes-first HTTP service that proxies both Git smart HTTP
 traffic and a curated subset of the GitHub API on behalf of internal
 consumers. It authenticates as one or more GitHub Apps, holds the App private
-keys itself, and issues short-lived opaque tokens to consumers.
+keys itself, and authenticates consumers with static bearer tokens whose
+secret is bcrypt-hashed in the policy document.
 
 Trust boundaries:
 
@@ -28,8 +29,9 @@ compiled policy). No database is required in v1.
 
 ## Request flow: Git fetch/push
 
-1. Consumer runs `git clone http://<token>@proxy/git/<org>/<repo>`.
-2. gh-proxy verifies the HMAC-signed token, extracting tenant + consumer.
+1. Consumer runs `git clone http://<consumer-id>.<secret>@proxy/git/<org>/<repo>`.
+2. gh-proxy looks up the consumer by id, bcrypt-compares the secret against
+   the stored hashes, and extracts tenant + consumer identity from the policy.
 3. The Git subpath and query (`service=git-upload-pack` vs
    `git-receive-pack`) are classified as `git.read` or `git.write`.
 4. Policy engine evaluates `(tenant, org, repo, endpoint, write?)`.
@@ -52,14 +54,17 @@ installation token.
 `policy.Engine`. Engine reads are RW-lock protected so the document can be
 hot-swapped when the ConfigMap changes.
 
-## Token lifecycle
+## Token model
 
-- Issued by `POST /v1/tokens` after upstream auth (mTLS/OIDC/SA token —
-  enforced in front of gh-proxy).
-- HMAC-SHA256 signed with a key from a Secret.
-- Default TTL 15 minutes; tenants and consumer IDs are carried in the claim.
-- Verified on every data-plane request; expiry and tenant mismatch both
-  hard-fail.
+- Static bearer tokens of the form `<consumer-id>.<secret>`.
+- `<consumer-id>` is a plaintext index; `<secret>` is bcrypt-compared against
+  `consumers[].token_hashes` in the policy document.
+- Multiple hashes per consumer are supported so that rotation can overlap new
+  and old secrets.
+- Tokens do not expire on their own. Rotation = publish a new token, add its
+  hash, distribute, remove the old hash from the ConfigMap.
+- `gh-proxy hash-token --consumer <id>` generates a random secret and the
+  matching bcrypt hash.
 
 ## Telemetry, logging, deployment
 

@@ -1,6 +1,5 @@
 listen_addr: :8080
 log_level: info
-token_signing_key: "replace-me-from-a-k8s-secret"
 policy_path: /etc/gh-proxy/policy.yaml
 github:
   app_id: 123456
@@ -8,8 +7,3 @@ github:
   api_base_url: https://api.github.com
 otel_endpoint: ""              # e.g. otel-collector.observability:4318
 webhook_secret: ""             # sourced from a k8s Secret
-upstream:
-  header: X-Forwarded-Identity
-  expected_prefix: "spiffe://"
-  # shared_token: "..."        # alternative: shared bearer token
-  # disabled: true             # dev-only opt-out

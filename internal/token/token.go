@@ -1,103 +1,74 @@
-// Package token issues and validates short-lived consumer tokens.
+// Package token validates static bearer tokens presented by consumers.
 //
-// Tokens are opaque to GitHub: they carry only the tenant and consumer
-// identity plus an expiry, and are signed with an HMAC key held by the proxy.
-// Consumers never receive GitHub App credentials or installation tokens.
+// Tokens are opaque to GitHub. Each token has the form "<consumer-id>.<secret>".
+// Consumers are defined in the policy document and carry one or more bcrypt
+// hashes of their secret; the verifier looks the consumer up by id and
+// constant-time-compares the presented secret against each stored hash.
 package token
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"time"
+	"strings"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/denysvitali/gh-proxy/internal/policy"
 )
 
-// Claims is the payload embedded in a consumer token.
+// Claims is the identity extracted from a verified token.
 type Claims struct {
-	Tenant   string `json:"t"`
-	Consumer string `json:"c"`
-	IssuedAt int64  `json:"iat"`
-	Expiry   int64  `json:"exp"`
-	Nonce    string `json:"n,omitempty"`
+	Tenant   string
+	Consumer string
 }
 
-// Valid reports whether the claims are non-empty and unexpired at now.
-func (c Claims) Valid(now time.Time) error {
-	if c.Tenant == "" || c.Consumer == "" {
-		return errors.New("token: missing tenant or consumer")
+// ConsumerLookup resolves a consumer id to its policy entry.
+type ConsumerLookup interface {
+	Consumer(id string) (*policy.Consumer, bool)
+}
+
+// Verifier validates presented tokens against consumers in the policy.
+type Verifier struct {
+	lookup ConsumerLookup
+}
+
+// NewVerifier returns a Verifier backed by the given lookup.
+func NewVerifier(lookup ConsumerLookup) *Verifier {
+	return &Verifier{lookup: lookup}
+}
+
+// ErrMalformed is returned when the token does not contain a "." separator.
+var ErrMalformed = errors.New("token: malformed")
+
+// ErrUnknownConsumer is returned when the token's consumer id is not in policy.
+var ErrUnknownConsumer = errors.New("token: unknown consumer")
+
+// ErrBadSecret is returned when no stored hash matches the presented secret.
+var ErrBadSecret = errors.New("token: bad secret")
+
+// Verify parses the token and returns its Claims on success.
+func (v *Verifier) Verify(tok string) (Claims, error) {
+	id, secret, ok := strings.Cut(tok, ".")
+	if !ok || id == "" || secret == "" {
+		return Claims{}, ErrMalformed
 	}
-	if c.Expiry == 0 || now.Unix() >= c.Expiry {
-		return errors.New("token: expired")
+	c, ok := v.lookup.Consumer(id)
+	if !ok {
+		return Claims{}, ErrUnknownConsumer
 	}
-	return nil
-}
-
-// Issuer signs Claims into tokens and verifies tokens back to Claims.
-type Issuer struct {
-	key []byte
-	ttl time.Duration
-	now func() time.Time
-}
-
-// NewIssuer constructs an Issuer. ttl must be positive.
-func NewIssuer(key []byte, ttl time.Duration) *Issuer {
-	return &Issuer{key: key, ttl: ttl, now: time.Now}
-}
-
-// Issue mints a token for a consumer of a tenant.
-func (i *Issuer) Issue(tenant, consumer string) (string, Claims, error) {
-	now := i.now()
-	claims := Claims{
-		Tenant:   tenant,
-		Consumer: consumer,
-		IssuedAt: now.Unix(),
-		Expiry:   now.Add(i.ttl).Unix(),
-	}
-	body, err := json.Marshal(claims)
-	if err != nil {
-		return "", claims, err
-	}
-	payload := base64.RawURLEncoding.EncodeToString(body)
-	sig := i.sign(payload)
-	return payload + "." + sig, claims, nil
-}
-
-// Verify parses and validates a token, returning its claims on success.
-func (i *Issuer) Verify(tok string) (Claims, error) {
-	var claims Claims
-	dot := -1
-	for idx := 0; idx < len(tok); idx++ {
-		if tok[idx] == '.' {
-			dot = idx
-			break
+	for _, h := range c.TokenHashes {
+		if err := bcrypt.CompareHashAndPassword([]byte(h), []byte(secret)); err == nil {
+			return Claims{Tenant: c.Tenant, Consumer: c.ID}, nil
 		}
 	}
-	if dot < 0 {
-		return claims, errors.New("token: malformed")
-	}
-	payload, sig := tok[:dot], tok[dot+1:]
-	want := i.sign(payload)
-	if !hmac.Equal([]byte(sig), []byte(want)) {
-		return claims, errors.New("token: bad signature")
-	}
-	body, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		return claims, fmt.Errorf("token: decode: %w", err)
-	}
-	if err := json.Unmarshal(body, &claims); err != nil {
-		return claims, fmt.Errorf("token: parse: %w", err)
-	}
-	if err := claims.Valid(i.now()); err != nil {
-		return claims, err
-	}
-	return claims, nil
+	return Claims{}, ErrBadSecret
 }
 
-func (i *Issuer) sign(payload string) string {
-	m := hmac.New(sha256.New, i.key)
-	m.Write([]byte(payload))
-	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
+// Hash returns a bcrypt hash of secret at the default cost. Exposed for the
+// `hash-token` helper command.
+func Hash(secret string) (string, error) {
+	b, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }

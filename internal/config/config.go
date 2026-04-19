@@ -2,7 +2,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -55,10 +54,6 @@ type Config struct {
 	ListenAddr string `mapstructure:"listen_addr"`
 	LogLevel   string `mapstructure:"log_level"`
 
-	// TokenSigningKey is used to HMAC-sign short-lived consumer tokens.
-	// In Kubernetes this is sourced from a Secret.
-	TokenSigningKey string `mapstructure:"token_signing_key"`
-
 	// PolicyPath points at a directory or file containing policy YAML
 	// (typically a mounted ConfigMap).
 	PolicyPath string `mapstructure:"policy_path"`
@@ -71,18 +66,6 @@ type Config struct {
 
 	// WebhookSecret validates GitHub webhook deliveries (optional).
 	WebhookSecret string `mapstructure:"webhook_secret"`
-
-	// Upstream configures the guard in front of /v1/tokens.
-	Upstream UpstreamAuthConfig `mapstructure:"upstream"`
-}
-
-// UpstreamAuthConfig configures the /v1/tokens guard.
-type UpstreamAuthConfig struct {
-	Header         string `mapstructure:"header"`
-	ExpectedPrefix string `mapstructure:"expected_prefix"`
-	SharedToken    string `mapstructure:"shared_token"`
-	TokenHeader    string `mapstructure:"token_header"`
-	Disabled       bool   `mapstructure:"disabled"` // opt-out, for dev only
 }
 
 // GitHubAppConfig holds GitHub App credentials.
@@ -116,12 +99,6 @@ func Load(v *viper.Viper) (*Config, error) {
 	var c Config
 	if err := v.Unmarshal(&c); err != nil {
 		return nil, err
-	}
-	if c.TokenSigningKey == "" {
-		return nil, fmt.Errorf("token_signing_key is required")
-	}
-	if !c.Upstream.Disabled && c.Upstream.Header == "" && c.Upstream.SharedToken == "" {
-		return nil, fmt.Errorf("upstream auth is required: set upstream.header, upstream.shared_token, or upstream.disabled=true")
 	}
 	return &c, nil
 }
