@@ -89,6 +89,14 @@ func (c *Client) AppJWT() (string, error) {
 	return t.SignedString(c.key)
 }
 
+// InvalidateInstallation drops any cached token for the installation. It is
+// called in response to webhook events like installation suspension.
+func (c *Client) InvalidateInstallation(id int64) {
+	c.mu.Lock()
+	delete(c.cache, id)
+	c.mu.Unlock()
+}
+
 // InstallationToken returns a cached installation token or fetches a fresh one.
 func (c *Client) InstallationToken(ctx context.Context, installationID int64) (string, error) {
 	c.mu.Lock()
