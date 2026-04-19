@@ -154,7 +154,7 @@ func (d Deps) gitProxy(c *gin.Context) {
 	if dec := d.Engine.Evaluate(policy.Request{
 		Tenant: claims.Tenant, Org: org, Repo: repo, Write: write, Endpoint: endpoint,
 	}); !dec.Allowed {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": dec.Reason})
+		denyPolicy(c, claims, org, repo, endpoint, write, dec.Reason)
 		return
 	}
 
@@ -167,6 +167,20 @@ func (d Deps) gitProxy(c *gin.Context) {
 
 	target, _ := url.Parse(fmt.Sprintf("%s/%s/%s.git%s", strings.TrimRight(d.GitBaseURL, "/"), org, repo, rest))
 	d.forward(c, target, "x-access-token", instToken)
+}
+
+func denyPolicy(c *gin.Context, claims token.Claims, org, repo string, endpoint policy.EndpointClass, write bool, reason string) {
+	logrus.WithFields(logrus.Fields{
+		"tenant":         claims.Tenant,
+		"consumer":       claims.Consumer,
+		"org":            org,
+		"repo":           repo,
+		"endpoint_class": string(endpoint),
+		"write":          write,
+		"reason":         reason,
+	}).Warn("policy: denied")
+	c.Set("auth_reason", reason)
+	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": reason})
 }
 
 func (d Deps) apiProxy(c *gin.Context) {
@@ -183,7 +197,7 @@ func (d Deps) apiProxy(c *gin.Context) {
 	if dec := d.Engine.Evaluate(policy.Request{
 		Tenant: claims.Tenant, Org: org, Repo: repo, Write: write, Endpoint: endpoint,
 	}); !dec.Allowed {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": dec.Reason})
+		denyPolicy(c, claims, org, repo, endpoint, write, dec.Reason)
 		return
 	}
 
