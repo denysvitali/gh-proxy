@@ -1,0 +1,6 @@
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY gh-proxy /usr/local/bin/gh-proxy
+USER nonroot:nonroot
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/gh-proxy"]
+CMD ["serve"]
