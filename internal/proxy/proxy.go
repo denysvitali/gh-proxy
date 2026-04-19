@@ -166,7 +166,8 @@ func (d Deps) gitProxy(c *gin.Context) {
 	}
 
 	target, _ := url.Parse(fmt.Sprintf("%s/%s/%s.git%s", strings.TrimRight(d.GitBaseURL, "/"), org, repo, rest))
-	d.forward(c, target, "x-access-token", instToken)
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + instToken))
+	d.forward(c, target, "Basic "+basic)
 }
 
 func denyPolicy(c *gin.Context, claims token.Claims, org, repo string, endpoint policy.EndpointClass, write bool, reason string) {
@@ -209,10 +210,10 @@ func (d Deps) apiProxy(c *gin.Context) {
 	}
 
 	target, _ := url.Parse(fmt.Sprintf("%s/repos/%s/%s%s", strings.TrimRight(d.APIBaseURL, "/"), org, repo, rest))
-	d.forward(c, target, "token", instToken)
+	d.forward(c, target, "token "+instToken)
 }
 
-func (d Deps) forward(c *gin.Context, target *url.URL, scheme, token string) {
+func (d Deps) forward(c *gin.Context, target *url.URL, authz string) {
 	target.RawQuery = c.Request.URL.RawQuery
 	client := d.HTTPClient
 	if client == nil {
@@ -225,7 +226,7 @@ func (d Deps) forward(c *gin.Context, target *url.URL, scheme, token string) {
 		return
 	}
 	copyHeaders(out.Header, c.Request.Header)
-	out.Header.Set("Authorization", scheme+" "+token)
+	out.Header.Set("Authorization", authz)
 	out.Header.Del("Cookie")
 
 	resp, err := client.Do(out)
