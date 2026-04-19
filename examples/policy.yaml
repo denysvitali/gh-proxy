@@ -1,0 +1,15 @@
+version: 1
+tenants:
+  - name: acme
+    installation_id: 12345678
+    org: acme
+    repos:
+      - name: app
+        access: read
+        endpoints: [git.read, actions.workflows]
+      - name: infra
+        access: write
+        endpoints: ["*"]
+consumers:
+  - id: ci-runner
+    tenant: acme
