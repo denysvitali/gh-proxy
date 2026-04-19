@@ -58,13 +58,15 @@ func New(cfg *config.Config) (*Server, error) {
 
 	verifier := token.NewVerifier(engine)
 
-	var gh *ghapp.Client
-	if cfg.GitHub.AppID != 0 {
-		c, err := ghapp.NewClient(cfg.GitHub.AppID, cfg.GitHub.PrivateKeyPath, cfg.GitHub.APIBaseURL)
-		if err != nil {
-			return nil, err
-		}
-		gh = c
+	if cfg.GitHub.AppID == 0 {
+		return nil, fmt.Errorf("github.app_id is required")
+	}
+	if cfg.GitHub.PrivateKeyPath == "" {
+		return nil, fmt.Errorf("github.private_key_path is required")
+	}
+	gh, err := ghapp.NewClient(cfg.GitHub.AppID, cfg.GitHub.PrivateKeyPath, cfg.GitHub.APIBaseURL)
+	if err != nil {
+		return nil, err
 	}
 
 	tele, err := telemetry.Setup(context.Background(), cfg.OTelEndpoint, "gh-proxy")
@@ -87,12 +89,9 @@ func New(cfg *config.Config) (*Server, error) {
 	if cfg.WebhookSecret != "" {
 		wh := &webhook.Handler{
 			Secret:   []byte(cfg.WebhookSecret),
-			Inval:    gh, // *ghapp.Client satisfies Invalidator; nil-safe via optional iface check below
+			Inval:    gh,
 			Reloader: &policyReloader{path: cfg.PolicyPath, engine: engine},
 			Log:      logrus.StandardLogger(),
-		}
-		if gh == nil {
-			wh.Inval = nil
 		}
 		wh.Register(r)
 	}
