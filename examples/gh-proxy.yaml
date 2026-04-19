@@ -1,0 +1,8 @@
+listen_addr: :8080
+log_level: info
+token_signing_key: "replace-me-from-a-k8s-secret"
+policy_path: /etc/gh-proxy/policy.yaml
+github:
+  app_id: 123456
+  private_key_path: /etc/gh-proxy/app.pem
+  api_base_url: https://api.github.com
