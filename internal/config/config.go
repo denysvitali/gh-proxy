@@ -4,12 +4,35 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 
 	"github.com/denysvitali/gh-proxy/internal/policy"
 )
+
+// configKeys lists every mapstructure key the Config struct understands.
+// Viper's AutomaticEnv only binds env vars for keys it already knows about
+// (via defaults, flags, or explicit BindEnv); nested struct fields loaded
+// purely from YAML would otherwise be invisible to env overrides. See
+// https://github.com/spf13/viper/issues/761.
+var configKeys = []string{
+	"listen_addr",
+	"log_level",
+	"token_signing_key",
+	"policy_path",
+	"otel_endpoint",
+	"webhook_secret",
+	"github.app_id",
+	"github.private_key_path",
+	"github.api_base_url",
+	"upstream.header",
+	"upstream.expected_prefix",
+	"upstream.shared_token",
+	"upstream.token_header",
+	"upstream.disabled",
+}
 
 // Config is the top-level runtime config for gh-proxy.
 type Config struct {
@@ -58,6 +81,14 @@ func Load(v *viper.Viper) (*Config, error) {
 	v.SetDefault("listen_addr", ":8080")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("github.api_base_url", "https://api.github.com")
+
+	// Map nested keys like github.app_id to GH_PROXY_GITHUB_APP_ID, and
+	// explicitly bind every key so env overrides work even when the key is
+	// absent from the config file.
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	for _, k := range configKeys {
+		_ = v.BindEnv(k)
+	}
 
 	if err := v.ReadInConfig(); err != nil {
 		// Missing file is OK if env vars provide everything.
