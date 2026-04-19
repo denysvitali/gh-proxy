@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -22,7 +23,6 @@ import (
 // Server wraps the HTTP server and its collaborators.
 type Server struct {
 	cfg    *config.Config
-	log    *logrus.Logger
 	engine *policy.Engine
 	gh     *ghapp.Client
 	tele   *telemetry.Providers
@@ -45,7 +45,7 @@ func (p *policyReloader) Reload() error {
 }
 
 // New constructs a Server from config.
-func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
+func New(cfg *config.Config) (*Server, error) {
 	engine := policy.NewEngine(nil)
 	if cfg.PolicyPath != "" {
 		doc, err := config.ReadPolicyFile(cfg.PolicyPath)
@@ -54,6 +54,7 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 		}
 		engine.Replace(doc)
 	}
+	logPolicySummary(engine)
 
 	verifier := token.NewVerifier(engine)
 
@@ -72,7 +73,7 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 	}
 
 	r := gin.New()
-	r.Use(gin.Recovery(), requestLogger(log), tele.Middleware())
+	r.Use(gin.Recovery(), requestLogger(), tele.Middleware())
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
 
 	proxy.Register(r, proxy.Deps{
@@ -88,7 +89,7 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 			Secret:   []byte(cfg.WebhookSecret),
 			Inval:    gh, // *ghapp.Client satisfies Invalidator; nil-safe via optional iface check below
 			Reloader: &policyReloader{path: cfg.PolicyPath, engine: engine},
-			Log:      log,
+			Log:      logrus.StandardLogger(),
 		}
 		if gh == nil {
 			wh.Inval = nil
@@ -98,7 +99,6 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 
 	return &Server{
 		cfg:    cfg,
-		log:    log,
 		engine: engine,
 		gh:     gh,
 		tele:   tele,
@@ -106,11 +106,40 @@ func New(cfg *config.Config, log *logrus.Logger) (*Server, error) {
 	}, nil
 }
 
+// logPolicySummary emits a concise startup summary of who can do what, to
+// make 401/403 debugging easier.
+func logPolicySummary(e *policy.Engine) {
+	doc := e.Snapshot()
+	if doc == nil {
+		logrus.Warn("no policy loaded; all requests will fail with 401/403")
+		return
+	}
+	for _, t := range doc.Tenants {
+		repos := make([]string, 0, len(t.Repos))
+		for _, r := range t.Repos {
+			repos = append(repos, fmt.Sprintf("%s (%s)", r.Name, r.Access))
+		}
+		logrus.WithFields(logrus.Fields{
+			"tenant":          t.Name,
+			"org":             t.Org,
+			"installation_id": t.InstallationID,
+			"repos":           repos,
+		}).Info("policy: tenant loaded")
+	}
+	for _, c := range doc.Consumers {
+		logrus.WithFields(logrus.Fields{
+			"consumer":    c.ID,
+			"tenant":      c.Tenant,
+			"token_count": len(c.TokenHashes),
+		}).Info("policy: consumer loaded")
+	}
+}
+
 // Run starts the server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
-		s.log.WithField("addr", s.http.Addr).Info("gh-proxy listening")
+		logrus.WithField("addr", s.http.Addr).Info("gh-proxy listening")
 		if err := s.http.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return
@@ -128,18 +157,25 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-func requestLogger(log *logrus.Logger) gin.HandlerFunc {
+func requestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
 		if c.Request.URL.Path == "/healthz" {
 			return
 		}
-		log.WithFields(logrus.Fields{
-			"method":  c.Request.Method,
-			"path":    c.Request.URL.Path,
-			"status":  c.Writer.Status(),
-			"latency": time.Since(start).String(),
-		}).Info("request")
+		fields := logrus.Fields{
+			"method":      c.Request.Method,
+			"path":        c.Request.URL.Path,
+			"status":      c.Writer.Status(),
+			"latency":     time.Since(start).String(),
+			"remote_addr": c.ClientIP(),
+		}
+		for _, k := range []string{"tenant", "consumer", "repo", "endpoint_class", "auth_reason"} {
+			if v, ok := c.Get(k); ok {
+				fields[k] = v
+			}
+		}
+		logrus.WithFields(fields).Info("request")
 	}
 }

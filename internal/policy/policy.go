@@ -113,6 +113,14 @@ func (d *Document) Validate() error {
 	return nil
 }
 
+// Snapshot returns a shallow copy of the current document for read-only use
+// (e.g. startup logging). Returns nil if no document is loaded.
+func (e *Engine) Snapshot() *Document {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.doc
+}
+
 // Consumer looks up a consumer by ID.
 func (e *Engine) Consumer(id string) (*Consumer, bool) {
 	e.mu.RLock()

@@ -50,15 +50,14 @@ func NewRootCmd() *cobra.Command {
 				return fmt.Errorf("load config: %w", err)
 			}
 
-			log := logrus.New()
-			log.SetFormatter(&logrus.JSONFormatter{})
+			logrus.SetFormatter(&logrus.JSONFormatter{})
 			if cfg.LogLevel != "" {
 				if lvl, err := logrus.ParseLevel(cfg.LogLevel); err == nil {
-					log.SetLevel(lvl)
+					logrus.SetLevel(lvl)
 				}
 			}
 
-			srv, err := server.New(cfg, log)
+			srv, err := server.New(cfg)
 			if err != nil {
 				return err
 			}

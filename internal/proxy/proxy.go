@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
 
 	"github.com/denysvitali/gh-proxy/internal/ghapp"
 	"github.com/denysvitali/gh-proxy/internal/policy"
@@ -41,19 +42,59 @@ const claimsKey ctxKey = "claims"
 
 func (d Deps) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tok, ok := extractToken(c.GetHeader("Authorization"))
+		h := c.GetHeader("Authorization")
+		scheme := authScheme(h)
+		c.Set("auth_scheme", scheme)
+
+		tok, ok := extractToken(h)
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer or basic token"})
+			reason := "no Authorization header"
+			if h != "" {
+				reason = fmt.Sprintf("unsupported or malformed %q credential", scheme)
+			}
+			logrus.WithFields(logrus.Fields{
+				"remote_addr": c.ClientIP(),
+				"path":        c.Request.URL.Path,
+				"auth_scheme": scheme,
+				"reason":      reason,
+			}).Warn("auth: rejected")
+			c.Set("auth_reason", reason)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": reason})
 			return
 		}
+
+		// Split out the consumer id for logging, so failures point at a name.
+		id, _, _ := strings.Cut(tok, ".")
+		c.Set("consumer", id)
+
 		claims, err := d.Tokens.Verify(tok)
 		if err != nil {
+			logrus.WithFields(logrus.Fields{
+				"remote_addr": c.ClientIP(),
+				"path":        c.Request.URL.Path,
+				"auth_scheme": scheme,
+				"consumer":    id,
+				"reason":      err.Error(),
+			}).Warn("auth: rejected")
+			c.Set("auth_reason", err.Error())
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
 		}
 		c.Set(string(claimsKey), claims)
+		c.Set("tenant", claims.Tenant)
+		c.Set("consumer", claims.Consumer)
 		c.Next()
 	}
+}
+
+func authScheme(h string) string {
+	if h == "" {
+		return "none"
+	}
+	if i := strings.IndexByte(h, ' '); i > 0 {
+		return strings.ToLower(h[:i])
+	}
+	return "unknown"
 }
 
 // extractToken returns the "<id>.<secret>" token carried by the Authorization
