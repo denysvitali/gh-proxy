@@ -122,7 +122,7 @@ func (c *Client) InstallationToken(ctx context.Context, installationID int64) (s
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("ghapp: installation token %d: %s", resp.StatusCode, string(body))

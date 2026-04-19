@@ -1,3 +1,4 @@
+// Command gh-proxy is the entrypoint for the gh-proxy server and tooling.
 package main
 
 import (

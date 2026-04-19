@@ -1,3 +1,4 @@
+// Package config loads the gh-proxy YAML/env configuration.
 package config
 
 import (

@@ -171,7 +171,7 @@ func (d Deps) forward(c *gin.Context, target *url.URL, scheme, token string) {
 		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	copyHeaders(c.Writer.Header(), resp.Header)
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(c.Writer, resp.Body)

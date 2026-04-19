@@ -12,6 +12,7 @@ import (
 // Access is a repo-level access level.
 type Access string
 
+// Repo-level access levels.
 const (
 	AccessNone  Access = "none"
 	AccessRead  Access = "read"
@@ -23,6 +24,7 @@ const (
 // before checking policy.
 type EndpointClass string
 
+// Known endpoint classes recognised by the proxy.
 const (
 	EndpointGitRead     EndpointClass = "git.read"
 	EndpointGitWrite    EndpointClass = "git.write"

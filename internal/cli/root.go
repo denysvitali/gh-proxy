@@ -1,3 +1,4 @@
+// Package cli wires Cobra commands for the gh-proxy binary.
 package cli
 
 import (
