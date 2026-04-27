@@ -196,7 +196,10 @@ func (e *Engine) Evaluate(req Request) Decision {
 	}
 	repo := findRepo(t.Repos, req.Repo)
 	if repo == nil {
-		return Decision{false, "repo not in policy"}
+		if req.Write {
+			return Decision{false, "repo not in policy, write not allowed"}
+		}
+		return Decision{true, ""}
 	}
 	if req.Write && repo.Access != AccessWrite {
 		return Decision{false, "write not allowed"}
