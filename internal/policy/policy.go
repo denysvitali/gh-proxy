@@ -192,7 +192,9 @@ func (e *Engine) Evaluate(req Request) Decision {
 		return Decision{false, "unknown tenant"}
 	}
 	if req.Org != "" && !strings.EqualFold(req.Org, t.Org) {
-		return Decision{false, "org mismatch for tenant"}
+		if req.Write {
+			return Decision{false, "org mismatch for tenant"}
+		}
 	}
 	repo := findRepo(t.Repos, req.Repo)
 	if repo == nil {

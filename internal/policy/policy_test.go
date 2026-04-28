@@ -49,7 +49,10 @@ func TestEvaluate(t *testing.T) {
 		{"repo not in policy, write denied", Request{Tenant: "acme", Org: "acme", Repo: "ghost", Write: true, Endpoint: EndpointGitWrite}, false},
 		{"none access denies read", Request{Tenant: "acme", Org: "acme", Repo: "locked", Endpoint: EndpointGitRead}, false},
 		{"unknown tenant", Request{Tenant: "other", Repo: "app"}, false},
-		{"org mismatch", Request{Tenant: "acme", Org: "evil", Repo: "app", Endpoint: EndpointGitRead}, false},
+		{"org mismatch read allowed", Request{Tenant: "acme", Org: "evil", Repo: "app", Endpoint: EndpointGitRead}, true},
+		{"org mismatch write denied", Request{Tenant: "acme", Org: "evil", Repo: "app", Write: true, Endpoint: EndpointGitWrite}, false},
+		{"org mismatch repo not in policy read allowed", Request{Tenant: "acme", Org: "evil", Repo: "ghost", Endpoint: EndpointGitRead}, true},
+		{"org mismatch repo not in policy write denied", Request{Tenant: "acme", Org: "evil", Repo: "ghost", Write: true, Endpoint: EndpointGitWrite}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

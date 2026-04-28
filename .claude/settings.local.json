@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__gh-actions__list_runs",
+      "mcp__gh-actions__diagnose_failure",
+      "Bash(golangci-lint run *)",
+      "mcp__gh-actions__wait_for_commit_checks"
+    ]
+  }
+}
