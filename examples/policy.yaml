@@ -7,8 +7,17 @@ tenants:
       - name: app
         access: read
         endpoints: [git.read, actions.workflows]
+        # Optional ref-name filter (only checked on pushes). All fields
+        # are Git-style single-segment globs (filepath.Match). Empty
+        # fields impose no restriction.
+        # ref_allow: [refs/heads/feature/*]
+        # ref_deny:  [refs/heads/wip/*]
+        # protected_refs: [master, main]
       - name: infra
         access: write
+        # The wildcard "*" grants every endpoint class, including
+        # api.pulls.merge. If you want everything except merge, list
+        # the classes explicitly and omit api.pulls.merge.
         endpoints: ["*"]
 consumers:
   - id: ci-runner
@@ -17,3 +26,6 @@ consumers:
     # The caller presents the full token "<id>.<secret>" as a Bearer token.
     token_hashes:
       - "$2a$10$REPLACE_ME_WITH_BCRYPT_HASH_OF_THE_SECRET"
+    # Optional: pin this consumer to specific source IPs. Empty =
+    # no restriction. Invalid CIDRs fail policy load.
+    # ip_allow: [10.0.0.0/8]
