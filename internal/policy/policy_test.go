@@ -1,6 +1,9 @@
 package policy
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
 
 func baseDoc() *Document {
 	return &Document{
@@ -187,5 +190,44 @@ func TestCheckPushRefs(t *testing.T) {
 		if got != c.wantRef {
 			t.Errorf("CheckPushRefs(%q, %v): got %q, want %q", c.repo, c.refs, got, c.wantRef)
 		}
+	}
+}
+
+func TestIPAllowed(t *testing.T) {
+	cases := []struct {
+		ipAllow []string
+		ip      string
+		want    bool
+	}{
+		// Empty list = no restriction.
+		{nil, "1.2.3.4", true},
+		{[]string{}, "1.2.3.4", true},
+		// Single IPv4 CIDR.
+		{[]string{"10.0.0.0/8"}, "10.1.2.3", true},
+		{[]string{"10.0.0.0/8"}, "11.1.2.3", false},
+		// Multiple CIDRs, mixed v4/v6.
+		{[]string{"10.0.0.0/8", "192.168.1.0/24"}, "192.168.1.42", true},
+		{[]string{"10.0.0.0/8", "192.168.1.0/24"}, "192.168.2.42", false},
+		// IPv6.
+		{[]string{"::1/128"}, "::1", true},
+		{[]string{"::1/128"}, "::2", false},
+		// Malformed entry is skipped (does not block).
+		{[]string{"not-a-cidr", "10.0.0.0/8"}, "10.1.2.3", true},
+		// Nil IP: cannot match anything, so denied.
+		{[]string{"10.0.0.0/8"}, "", false},
+	}
+	for _, c := range cases {
+		got := IPAllowed(c.ipAllow, net.ParseIP(c.ip))
+		if got != c.want {
+			t.Errorf("IPAllowed(%v, %q) = %v, want %v", c.ipAllow, c.ip, got, c.want)
+		}
+	}
+}
+
+func TestValidateRejectsBadIPAllow(t *testing.T) {
+	d := baseDoc()
+	d.Consumers[0].IPAllow = []string{"not-a-cidr"}
+	if err := d.Validate(); err == nil {
+		t.Fatal("expected error for bad ip_allow CIDR")
 	}
 }

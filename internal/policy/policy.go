@@ -5,6 +5,7 @@ package policy
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -99,10 +100,18 @@ type Repo struct {
 // of the secret part of their token. The on-the-wire token has the form
 // "<id>.<secret>"; the proxy looks up the consumer by id and bcrypt-compares
 // the secret against TokenHashes.
+//
+// IPAllow is an optional list of CIDR blocks; when non-empty, the
+// consumer's requests must come from an IP that matches at least one
+// block. An empty list imposes no restriction. The check is performed
+// by the auth middleware using the client IP reported by Gin
+// (c.ClientIP), which honours X-Forwarded-For when configured with
+// trusted proxies.
 type Consumer struct {
 	ID          string   `yaml:"id"`
 	Tenant      string   `yaml:"tenant"`
 	TokenHashes []string `yaml:"token_hashes"`
+	IPAllow     []string `yaml:"ip_allow,omitempty"`
 }
 
 // Validate checks the document is internally consistent.
@@ -147,6 +156,11 @@ func (d *Document) Validate() error {
 		}
 		if len(c.TokenHashes) == 0 {
 			return fmt.Errorf("policy: consumer %q has no token_hashes", c.ID)
+		}
+		for _, cidr := range c.IPAllow {
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				return fmt.Errorf("policy: consumer %q has invalid ip_allow CIDR %q: %w", c.ID, cidr, err)
+			}
 		}
 	}
 	return nil
@@ -361,4 +375,28 @@ func matchRef(pattern, ref string) bool {
 		return false
 	}
 	return ok
+}
+
+// IPAllowed reports whether ip is permitted by the given list of
+// CIDR blocks. An empty list allows every IP. Malformed entries are
+// skipped (so a typo in the policy does not silently lock out a
+// consumer — the operator sees the misconfiguration in the validate
+// step instead).
+func IPAllowed(ipAllow []string, ip net.IP) bool {
+	if len(ipAllow) == 0 {
+		return true
+	}
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range ipAllow {
+		_, n, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -120,6 +121,24 @@ func (d Deps) authMiddleware() gin.HandlerFunc {
 			c.Set("auth_reason", err.Error())
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
+		}
+		// Per-consumer IP allowlist. Empty list = no restriction.
+		// The lookup is a re-read of the consumer entry, but the
+		// policy.Engine is RW-lock protected and Consumer returns
+		// by value, so the read is cheap and lock-free on the hot
+		// path.
+		if cons, ok := d.Engine.Consumer(claims.Consumer); ok && len(cons.IPAllow) > 0 {
+			if !policy.IPAllowed(cons.IPAllow, net.ParseIP(c.ClientIP())) {
+				logrus.WithFields(logrus.Fields{
+					"remote_addr": c.ClientIP(),
+					"path":        c.Request.URL.Path,
+					"consumer":    claims.Consumer,
+					"ip_allow":    cons.IPAllow,
+				}).Warn("auth: ip not in allowlist")
+				c.Set("auth_reason", "ip not allowed for consumer")
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "ip not allowed for consumer"})
+				return
+			}
 		}
 		c.Set(string(claimsKey), claims)
 		c.Set("tenant", claims.Tenant)
