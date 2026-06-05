@@ -14,7 +14,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
-	"github.com/denysvitali/gh-proxy/internal/ghapp"
 	"github.com/denysvitali/gh-proxy/internal/policy"
 	"github.com/denysvitali/gh-proxy/internal/token"
 )
@@ -23,10 +22,17 @@ import (
 type Deps struct {
 	Engine     *policy.Engine
 	Tokens     *token.Verifier
-	GitHubApp  *ghapp.Client
+	GitHubApp  GitHubApp
 	APIBaseURL string
 	GitBaseURL string // e.g. https://github.com
 	HTTPClient *http.Client
+}
+
+// GitHubApp is the minimal subset of *ghapp.Client the data plane needs.
+// Defined as an interface here so tests can substitute a fake without
+// touching the real GitHub App.
+type GitHubApp interface {
+	InstallationToken(ctx context.Context, installationID int64) (string, error)
 }
 
 // Register attaches proxy routes to the router.
@@ -281,6 +287,3 @@ func classifyAPI(rest string) policy.EndpointClass {
 		return policy.EndpointRefs
 	}
 }
-
-// Ensure context import is kept for future streaming work.
-var _ = context.Background

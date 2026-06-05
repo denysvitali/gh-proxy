@@ -1,0 +1,10 @@
+	github.com/denysvitali/gh-proxy/cmd/gh-proxy		coverage: 0.0% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/cli	13.642s	coverage: 86.8% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/config	0.008s	coverage: 89.6% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/ghapp	0.278s	coverage: 70.4% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/policy	0.005s	coverage: 98.8% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/proxy	3.542s	coverage: 96.1% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/server	0.769s	coverage: 89.7% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/telemetry	0.014s	coverage: 90.0% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/token	0.527s	coverage: 93.3% of statements
+ok  	github.com/denysvitali/gh-proxy/internal/webhook	0.006s	coverage: 91.9% of statements
