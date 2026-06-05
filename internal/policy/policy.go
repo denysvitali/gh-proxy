@@ -25,12 +25,30 @@ const (
 type EndpointClass string
 
 // Known endpoint classes recognised by the proxy.
+//
+// The `api.pulls.*` family is intentionally finer-grained than the legacy
+// `api.pulls` umbrella:
+//
+//   - EndpointPullRequest  — read PRs (list, get). Also implied by
+//     EndpointPullRequest for backwards compat (see hasEndpoint).
+//   - EndpointPullsCreate  — create / update / modify a PR (POST /pulls,
+//     PATCH /pulls/{id}, and other writes to PR sub-paths that are not
+//     reviews, comments, or merge).
+//   - EndpointPullsReview  — post review comments and PR conversation
+//     comments. Safe for AI consumers that should not be able to approve
+//     or merge.
+//   - EndpointPullsMerge   — actually merge a PR, or submit an
+//     "approve" / "request-changes" review event. Opt-in only; NOT
+//     implied by the legacy `api.pulls` class.
 const (
 	EndpointGitRead     EndpointClass = "git.read"
 	EndpointGitWrite    EndpointClass = "git.write"
 	EndpointWorkflows   EndpointClass = "actions.workflows"
 	EndpointRefs        EndpointClass = "api.refs"
 	EndpointPullRequest EndpointClass = "api.pulls"
+	EndpointPullsCreate EndpointClass = "api.pulls.create"
+	EndpointPullsReview EndpointClass = "api.pulls.review"
+	EndpointPullsMerge  EndpointClass = "api.pulls.merge"
 )
 
 // Document is the on-disk policy schema (one YAML file).
@@ -232,6 +250,17 @@ func hasEndpoint(list []EndpointClass, want EndpointClass) bool {
 	for _, e := range list {
 		if e == want || e == "*" {
 			return true
+		}
+		// Backwards compatibility: the legacy `api.pulls` umbrella class
+		// still grants reads, creates, and review-class actions. It does
+		// NOT grant `api.pulls.merge` — that is an explicit opt-in so a
+		// tenant can allow review/comment without allowing merge. The
+		// wildcard `*` (handled above) DOES grant `api.pulls.merge`.
+		if e == EndpointPullRequest {
+			switch want {
+			case EndpointPullsCreate, EndpointPullsReview:
+				return true
+			}
 		}
 	}
 	return false

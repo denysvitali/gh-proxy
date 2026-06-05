@@ -39,15 +39,35 @@ func TestExtractToken(t *testing.T) {
 }
 
 func TestClassifyAPI(t *testing.T) {
-	cases := map[string]policy.EndpointClass{
-		"/actions/runs":     policy.EndpointWorkflows,
-		"/pulls/42":         policy.EndpointPullRequest,
-		"/git/refs/heads/m": policy.EndpointRefs,
-		"/contents/README":  policy.EndpointRefs,
+	cases := []struct {
+		method string
+		rest   string
+		want   policy.EndpointClass
+	}{
+		// Existing behavior, now method-aware.
+		{"GET", "/actions/runs", policy.EndpointWorkflows},
+		{"GET", "/pulls", policy.EndpointPullRequest},
+		{"GET", "/pulls/42", policy.EndpointPullRequest},
+		{"GET", "/git/refs/heads/m", policy.EndpointRefs},
+		{"GET", "/contents/README", policy.EndpointRefs},
+
+		// PR create / merge / review split.
+		{"POST", "/pulls", policy.EndpointPullsCreate},
+		{"PATCH", "/pulls/42", policy.EndpointPullsCreate},
+		{"PUT", "/pulls/42/merge", policy.EndpointPullsMerge},
+		{"POST", "/pulls/42/merge", policy.EndpointPullsMerge},
+		{"POST", "/pulls/42/reviews", policy.EndpointPullsReview},
+		{"POST", "/pulls/42/reviews/7", policy.EndpointPullsReview},
+		{"POST", "/pulls/42/comments", policy.EndpointPullsReview},
+		{"POST", "/pulls/42/reviews/7/events", policy.EndpointPullsMerge},
+		// Other writes under /pulls/{id}/* bucket to create.
+		{"PUT", "/pulls/42/update_branch", policy.EndpointPullsCreate},
+		{"GET", "/pulls/42/files", policy.EndpointPullRequest},
 	}
-	for in, want := range cases {
-		if got := classifyAPI(in); got != want {
-			t.Fatalf("%s: got %s want %s", in, got, want)
+	for _, c := range cases {
+		got := classifyAPI(c.method, c.rest)
+		if got != c.want {
+			t.Errorf("%s %s: got %s want %s", c.method, c.rest, got, c.want)
 		}
 	}
 }

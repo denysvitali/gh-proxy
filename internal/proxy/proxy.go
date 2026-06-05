@@ -190,7 +190,7 @@ func (d Deps) apiProxy(c *gin.Context) {
 	repo := c.Param("repo")
 	rest := c.Param("rest")
 
-	endpoint := classifyAPI(rest)
+	endpoint := classifyAPI(c.Request.Method, rest)
 	write := c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead
 	c.Set("tenant", claims.Tenant)
 	c.Set("repo", org+"/"+repo)
@@ -268,17 +268,87 @@ func isGitWrite(path string, r *http.Request) bool {
 	return false
 }
 
-// classifyAPI maps a trailing API path to an endpoint class.
-func classifyAPI(rest string) policy.EndpointClass {
+// classifyAPI maps a (method, rest-path) pair to an endpoint class. The
+// PR sub-tree is method-aware so that POST /pulls (create), POST
+// /pulls/{id}/reviews (review), and PUT /pulls/{id}/merge (merge) can be
+// authorized independently.
+func classifyAPI(method, rest string) policy.EndpointClass {
 	switch {
 	case strings.HasPrefix(rest, "/actions"):
 		return policy.EndpointWorkflows
 	case strings.HasPrefix(rest, "/pulls"):
-		return policy.EndpointPullRequest
+		return classifyPulls(method, rest)
 	case strings.HasPrefix(rest, "/git/refs"), strings.HasPrefix(rest, "/refs"):
 		return policy.EndpointRefs
 	default:
 		return policy.EndpointRefs
+	}
+}
+
+// classifyPulls handles the /pulls sub-tree. It assumes rest has the
+// "/pulls" prefix; callers should only invoke it from classifyAPI.
+//
+//	/pulls                           (GET)    -> api.pulls
+//	/pulls                           (POST)   -> api.pulls.create
+//	/pulls/{id}                      (GET)    -> api.pulls
+//	/pulls/{id}                      (PATCH)  -> api.pulls.create
+//	/pulls/{id}/merge                (PUT/POST) -> api.pulls.merge
+//	/pulls/{id}/reviews              (POST)   -> api.pulls.review
+//	/pulls/{id}/comments             (POST)   -> api.pulls.review
+//	/pulls/{id}/reviews/{rid}/events (POST)   -> api.pulls.merge (approve/request-changes)
+//	/pulls/{id}/*                    (other)  -> api.pulls.create
+func classifyPulls(method, rest string) policy.EndpointClass {
+	isRead := method == http.MethodGet || method == http.MethodHead
+	if rest == "/pulls" {
+		if isRead {
+			return policy.EndpointPullRequest
+		}
+		return policy.EndpointPullsCreate
+	}
+	after, ok := strings.CutPrefix(rest, "/pulls/")
+	if !ok {
+		return policy.EndpointPullRequest
+	}
+	id, subpath, _ := strings.Cut(after, "/")
+	if id == "" {
+		return policy.EndpointPullRequest
+	}
+	if subpath == "" {
+		// /pulls/{id}
+		if isRead {
+			return policy.EndpointPullRequest
+		}
+		return policy.EndpointPullsCreate
+	}
+	if isRead {
+		return policy.EndpointPullRequest
+	}
+	first := subpath
+	if i := strings.IndexByte(subpath, '/'); i >= 0 {
+		first = subpath[:i]
+	}
+	switch first {
+	case "merge":
+		// GitHub accepts PUT (and historically POST) on /merge. Anything
+		// else (e.g. DELETE /merge) falls through to the generic write
+		// bucket.
+		if method == http.MethodPut || method == http.MethodPost {
+			return policy.EndpointPullsMerge
+		}
+		return policy.EndpointPullsCreate
+	case "reviews":
+		// POST /pulls/{id}/reviews/{rid}/events is the approve /
+		// request-changes submission path. It MUST be classified as
+		// merge-class so an AI consumer that can comment cannot
+		// self-approve.
+		if method == http.MethodPost && strings.HasSuffix(subpath, "/events") {
+			return policy.EndpointPullsMerge
+		}
+		return policy.EndpointPullsReview
+	case "comments":
+		return policy.EndpointPullsReview
+	default:
+		return policy.EndpointPullsCreate
 	}
 }
 
