@@ -62,6 +62,52 @@ Loaded via Viper (YAML + env vars prefixed `GH_PROXY_`). Keys:
 | `github.app_id` | GitHub App ID |
 | `github.private_key_path` | Path to the App private key PEM |
 | `github.api_base_url` | GitHub API base (default `https://api.github.com`) |
+| `git_push_max_body_bytes` | Cap on a single git-receive-pack body (default 1 MiB) |
+| `body_limit_bytes` | Global per-path request body cap (16 MiB `/api/*`, 4 MiB `/git/*` by default) |
+
+## Policy features
+
+The policy document supports these per-repo fields, in addition to
+`name`, `access`, and `endpoints`:
+
+```yaml
+tenants:
+  - name: acme
+    installation_id: 12345678
+    org: acme
+    repos:
+      - name: app
+        access: write
+        endpoints: [git.read, git.write, api.refs, api.pulls]
+        # Optional: filter pushed ref names against the receive-pack
+        # body. Patterns are Git-style single-segment globs.
+        ref_allow: [refs/heads/feature/*, refs/heads/fix/*]
+        ref_deny: [refs/heads/wip/*]
+        protected_refs: [master, main]   # short names → refs/heads/<name>
+consumers:
+  - id: ci-runner
+    tenant: acme
+    token_hashes: ["$2a$10$..."]
+    # Optional: pin this consumer to specific source IPs.
+    ip_allow: [10.0.0.0/8, 192.168.1.0/24]
+```
+
+The `endpoints` list understands the following classes:
+
+| Class                | Covers                                                       |
+| -------------------- | ------------------------------------------------------------ |
+| `git.read`           | `GET` on `/info/refs?service=git-upload-pack`, fetch pack    |
+| `git.write`          | `POST` on `/git-receive-pack`, push                          |
+| `actions.workflows`  | `GET`/`POST` on `/actions/...`                               |
+| `api.refs`           | `GET`/`POST` on `/git/refs/...`, `/contents/...`             |
+| `api.pulls`          | read PRs (umbrella — also grants `api.pulls.create` and `api.pulls.review` for backwards compat) |
+| `api.pulls.create`   | `POST /pulls`, `PATCH /pulls/{id}`                           |
+| `api.pulls.review`   | `POST /pulls/{id}/reviews`, `/pulls/{id}/comments`           |
+| `api.pulls.merge`    | `PUT/POST /pulls/{id}/merge`, approve/request-changes events |
+| `*`                  | everything, including `api.pulls.merge`                      |
+
+See `DESIGN.md` for the parser-based push check, the parse-fail-allow
+trade-off, and the reasoning behind the `api.pulls.merge` opt-in.
 
 ## Observability
 
