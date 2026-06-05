@@ -120,3 +120,72 @@ func TestEvaluatePRSubclasses(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckPushRefs covers the ref-name filter on push operations.
+// Order of evaluation: ProtectedRefs → RefDeny → RefAllow. Empty
+// filter sets always pass.
+func TestCheckPushRefs(t *testing.T) {
+	doc := &Document{
+		Version: 1,
+		Tenants: []Tenant{{
+			Name:           "acme",
+			InstallationID: 1,
+			Org:            "acme",
+			Repos: []Repo{
+				// No filters: every ref passes.
+				{Name: "open", Access: AccessWrite, Endpoints: []EndpointClass{EndpointGitWrite}},
+				// Allow-list only: only matching refs pass.
+				{Name: "allow", Access: AccessWrite, Endpoints: []EndpointClass{EndpointGitWrite},
+					RefAllow: []string{"refs/heads/feature/*", "refs/heads/fix/*"}},
+				// Deny-list only: matching refs are rejected.
+				{Name: "deny", Access: AccessWrite, Endpoints: []EndpointClass{EndpointGitWrite},
+					RefDeny: []string{"refs/heads/wip/*"}},
+				// Protected branches: short-name expansion.
+				{Name: "prot", Access: AccessWrite, Endpoints: []EndpointClass{EndpointGitWrite},
+					ProtectedRefs: []string{"main", "master"}},
+				// Combined: protected + allow.
+				{Name: "both", Access: AccessWrite, Endpoints: []EndpointClass{EndpointGitWrite},
+					RefAllow:      []string{"refs/heads/feature/*"},
+					ProtectedRefs: []string{"main"}},
+			},
+		}},
+		Consumers: []Consumer{{ID: "ci", Tenant: "acme", TokenHashes: []string{"x"}}},
+	}
+	e := NewEngine(doc)
+
+	cases := []struct {
+		repo    string
+		refs    []string
+		wantRef string // empty = allowed
+	}{
+		{"open", []string{"refs/heads/main"}, ""},
+		{"open", []string{"refs/heads/feature/x", "refs/heads/wip/y"}, ""},
+
+		{"allow", []string{"refs/heads/feature/x"}, ""},
+		{"allow", []string{"refs/heads/fix/y"}, ""},
+		{"allow", []string{"refs/heads/main"}, "refs/heads/main"},
+		{"allow", []string{"refs/heads/feature/foo/bar"}, "refs/heads/feature/foo/bar"},
+		{"allow", []string{"refs/tags/v1"}, "refs/tags/v1"},
+
+		{"deny", []string{"refs/heads/feature/x"}, ""},
+		{"deny", []string{"refs/heads/wip/x"}, "refs/heads/wip/x"},
+		{"deny", []string{"refs/heads/wip/a", "refs/heads/main"}, "refs/heads/wip/a"},
+
+		{"prot", []string{"refs/heads/main"}, "refs/heads/main"},
+		{"prot", []string{"refs/heads/master"}, "refs/heads/master"},
+		{"prot", []string{"refs/heads/dev"}, ""},
+
+		{"both", []string{"refs/heads/feature/x"}, ""},
+		{"both", []string{"refs/heads/main"}, "refs/heads/main"},
+		{"both", []string{"refs/tags/v1"}, "refs/tags/v1"},
+
+		// Repos not in the policy: the filter check is a no-op.
+		{"ghost", []string{"refs/heads/main"}, ""},
+	}
+	for _, c := range cases {
+		got := e.CheckPushRefs("acme", c.repo, c.refs)
+		if got != c.wantRef {
+			t.Errorf("CheckPushRefs(%q, %v): got %q, want %q", c.repo, c.refs, got, c.wantRef)
+		}
+	}
+}

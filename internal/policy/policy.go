@@ -5,6 +5,7 @@ package policy
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -67,10 +68,30 @@ type Tenant struct {
 }
 
 // Repo describes per-repo access. Name may be "*" to match any repo in the org.
+//
+// RefAllow, RefDeny, and ProtectedRefs are optional ref-name filters
+// applied to Git push operations. The filters are evaluated in order
+// against every refname parsed out of the receive-pack pkt-line body:
+//
+//  1. If RefAllow is non-empty, every pushed ref MUST match at least one
+//     pattern (e.g. "refs/heads/feature/*"). Non-matching → 403.
+//  2. If RefDeny is non-empty, no pushed ref may match any pattern.
+//  3. ProtectedRefs lists short branch names (e.g. "main", "master")
+//     that are treated as implicit denials under "refs/heads/<name>".
+//
+// Empty fields impose no additional restriction. Patterns are Git-style
+// path-segment globs: "*" matches exactly one segment and does not
+// cross "/" boundaries. See internal/proxy/gitrefs.go for the matcher
+// implementation. The push-body parser is conservative and may fail
+// open (allow) on malformed framing; that fallback is documented in
+// DESIGN.md.
 type Repo struct {
-	Name      string          `yaml:"name"`
-	Access    Access          `yaml:"access"`
-	Endpoints []EndpointClass `yaml:"endpoints"`
+	Name          string          `yaml:"name"`
+	Access        Access          `yaml:"access"`
+	Endpoints     []EndpointClass `yaml:"endpoints"`
+	RefAllow      []string        `yaml:"ref_allow,omitempty"`
+	RefDeny       []string        `yaml:"ref_deny,omitempty"`
+	ProtectedRefs []string        `yaml:"protected_refs,omitempty"`
 }
 
 // Consumer is an identity that authenticates with a static bearer token.
@@ -264,4 +285,80 @@ func hasEndpoint(list []EndpointClass, want EndpointClass) bool {
 		}
 	}
 	return false
+}
+
+// CheckPushRefs returns the first pushed refname that is forbidden by
+// the repo's ref filter, or "" if every ref is permitted (or the
+// repo has no filter configured). The caller is responsible for
+// extracting the list of pushed refnames from the receive-pack body
+// (see internal/proxy/gitrefs for the parser).
+//
+// Filter semantics, evaluated per ref in order:
+//  1. ProtectedRefs short names are expanded to "refs/heads/<name>"
+//     and treated as implicit denials.
+//  2. RefDeny patterns: a ref matches any pattern → denied.
+//  3. RefAllow patterns: if non-empty, a ref must match at least one
+//     pattern; otherwise it is denied.
+//
+// An empty ref filter set on the repo (the default) always returns "".
+func (e *Engine) CheckPushRefs(tenant, repoName string, refs []string) string {
+	t, ok := e.Tenant(tenant)
+	if !ok {
+		return ""
+	}
+	r := findRepo(t.Repos, repoName)
+	if r == nil {
+		return ""
+	}
+	if len(r.RefAllow) == 0 && len(r.RefDeny) == 0 && len(r.ProtectedRefs) == 0 {
+		return ""
+	}
+	for _, ref := range refs {
+		if refViolates(r, ref) {
+			return ref
+		}
+	}
+	return ""
+}
+
+// refViolates reports whether a single refname is forbidden by the
+// repo's filter set.
+func refViolates(r *Repo, ref string) bool {
+	for _, p := range r.ProtectedRefs {
+		if ref == "refs/heads/"+p {
+			return true
+		}
+	}
+	for _, pat := range r.RefDeny {
+		if matchRef(pat, ref) {
+			return true
+		}
+	}
+	if len(r.RefAllow) > 0 {
+		ok := false
+		for _, pat := range r.RefAllow {
+			if matchRef(pat, ref) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return true
+		}
+	}
+	return false
+}
+
+// matchRef is a Git-style ref glob: a single "*" matches one path
+// segment (does not cross "/"). This is what `git check-ref-format`
+// treats as a valid "fetch spec" wildcard, and it is the behaviour the
+// documentation and tests rely on. `*` in a multi-segment pattern like
+// "refs/heads/feature/*" therefore matches "refs/heads/feature/foo"
+// but NOT "refs/heads/feature/foo/bar".
+func matchRef(pattern, ref string) bool {
+	ok, err := filepath.Match(pattern, ref)
+	if err != nil {
+		return false
+	}
+	return ok
 }

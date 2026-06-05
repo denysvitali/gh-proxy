@@ -3,8 +3,9 @@
 package proxy
 
 import (
-	"context"
+	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,21 @@ type Deps struct {
 	APIBaseURL string
 	GitBaseURL string // e.g. https://github.com
 	HTTPClient *http.Client
+
+	// GitPushMaxBodyBytes caps the size of a git-receive-pack body
+	// that the proxy will read in order to enforce the per-repo
+	// ref-name filter (Repo.RefAllow / RefDeny / ProtectedRefs). A
+	// push whose body exceeds this cap is rejected with HTTP 413.
+	// Zero or negative means use proxy.MaxDefaultPushBody.
+	GitPushMaxBodyBytes int64
+}
+
+// pushBodyCap returns the effective per-push body cap.
+func (d Deps) pushBodyCap() int64 {
+	if d.GitPushMaxBodyBytes > 0 {
+		return d.GitPushMaxBodyBytes
+	}
+	return MaxDefaultPushBody
 }
 
 // Register attaches proxy routes to the router.
@@ -158,6 +174,39 @@ func (d Deps) gitProxy(c *gin.Context) {
 		return
 	}
 
+	// For push operations, enforce the per-repo ref-name filter
+	// (Repo.RefAllow / RefDeny / ProtectedRefs). The body is
+	// consumed into a buffer so it can be re-sent upstream — the
+	// cap is small (default 1 MiB) so memory is bounded. On any
+	// framing error the request is allowed through and a warning
+	// is logged; this is the "parse-fail-allow" fallback documented
+	// in DESIGN.md.
+	var bodyBytes []byte
+	if write {
+		buf, err := io.ReadAll(io.LimitReader(c.Request.Body, d.pushBodyCap()+1))
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		if int64(len(buf)) > d.pushBodyCap() {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "git push body exceeds configured cap"})
+			return
+		}
+		bodyBytes = buf
+		if denied := d.checkPushRefs(claims.Tenant, repo, bodyBytes); denied != "" {
+			logrus.WithFields(logrus.Fields{
+				"tenant":   claims.Tenant,
+				"consumer": claims.Consumer,
+				"org":      org,
+				"repo":     repo,
+				"ref":      denied,
+			}).Warn("policy: push ref denied")
+			c.Set("auth_reason", "push ref denied: "+denied)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "push ref denied: " + denied})
+			return
+		}
+	}
+
 	tenant, _ := d.Engine.Tenant(claims.Tenant)
 	instToken, err := d.GitHubApp.InstallationToken(c.Request.Context(), tenant.InstallationID)
 	if err != nil {
@@ -167,7 +216,28 @@ func (d Deps) gitProxy(c *gin.Context) {
 
 	target, _ := url.Parse(fmt.Sprintf("%s/%s/%s.git%s", strings.TrimRight(d.GitBaseURL, "/"), org, repo, rest))
 	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + instToken))
-	d.forward(c, target, "Basic "+basic)
+	d.forwardGit(c, target, "Basic "+basic, bodyBytes)
+}
+
+// checkPushRefs parses the receive-pack body and returns the first
+// pushed refname that is forbidden by the repo's ref filter, or "" if
+// every ref is permitted (or no filter is configured). On a framing
+// error it logs a warning and returns "" — the "parse-fail-allow"
+// fallback, see DESIGN.md.
+func (d Deps) checkPushRefs(tenant, repo string, body []byte) string {
+	refs, err := ParseReceivePackRefs(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			// Already enforced upstream of this function; we
+			// shouldn't get here. Be safe and fail closed
+			// (forbid) so the request is rejected, not silently
+			// passed.
+			return "body too large"
+		}
+		logParseFallback("", repo, err.Error())
+		return ""
+	}
+	return d.Engine.CheckPushRefs(tenant, repo, refs)
 }
 
 func denyPolicy(c *gin.Context, claims token.Claims, org, repo string, endpoint policy.EndpointClass, write bool, reason string) {
@@ -214,13 +284,28 @@ func (d Deps) apiProxy(c *gin.Context) {
 }
 
 func (d Deps) forward(c *gin.Context, target *url.URL, authz string) {
+	d.forwardWithBody(c, target, authz, c.Request.Body)
+}
+
+// forwardGit is forward, but the body is read from the supplied
+// buffer (used by the push handler after the ref-filter check has
+// consumed the body).
+func (d Deps) forwardGit(c *gin.Context, target *url.URL, authz string, body []byte) {
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	d.forwardWithBody(c, target, authz, r)
+}
+
+func (d Deps) forwardWithBody(c *gin.Context, target *url.URL, authz string, body io.Reader) {
 	target.RawQuery = c.Request.URL.RawQuery
 	client := d.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
 	}
 
-	out, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target.String(), c.Request.Body)
+	out, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target.String(), body)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -351,6 +436,3 @@ func classifyPulls(method, rest string) policy.EndpointClass {
 		return policy.EndpointPullsCreate
 	}
 }
-
-// Ensure context import is kept for future streaming work.
-var _ = context.Background

@@ -66,6 +66,13 @@ type Config struct {
 
 	// WebhookSecret validates GitHub webhook deliveries (optional).
 	WebhookSecret string `mapstructure:"webhook_secret"`
+
+	// GitPushMaxBodyBytes caps the size of a single git-receive-pack
+	// body that the proxy will inspect for ref-name filtering. A push
+	// with a body larger than this is rejected with 413. The default
+	// in proxy.MaxDefaultPushBody is 1 MiB. Setting this to 0
+	// disables the cap (not recommended).
+	GitPushMaxBodyBytes int64 `mapstructure:"git_push_max_body_bytes"`
 }
 
 // GitHubAppConfig holds GitHub App credentials.
@@ -80,6 +87,7 @@ func Load(v *viper.Viper) (*Config, error) {
 	v.SetDefault("listen_addr", ":8080")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("github.api_base_url", "https://api.github.com")
+	v.SetDefault("git_push_max_body_bytes", int64(1<<20)) // 1 MiB
 
 	// Map nested keys like github.app_id to GH_PROXY_GITHUB_APP_ID, and
 	// explicitly bind every key so env overrides work even when the key is

@@ -89,12 +89,13 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	proxy.Register(r, proxy.Deps{
-		Engine:     engine,
-		Tokens:     verifier,
-		GitHubApp:  gh,
-		APIBaseURL: cfg.GitHub.APIBaseURL,
-		GitBaseURL: "https://github.com",
-		HTTPClient: forwardClient,
+		Engine:              engine,
+		Tokens:              verifier,
+		GitHubApp:           gh,
+		APIBaseURL:          cfg.GitHub.APIBaseURL,
+		GitBaseURL:          "https://github.com",
+		HTTPClient:          forwardClient,
+		GitPushMaxBodyBytes: cfg.GitPushMaxBodyBytes,
 	})
 
 	if cfg.WebhookSecret != "" {
