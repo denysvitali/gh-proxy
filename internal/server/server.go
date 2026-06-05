@@ -96,6 +96,8 @@ func New(cfg *config.Config) (*Server, error) {
 		GitBaseURL:          "https://github.com",
 		HTTPClient:          forwardClient,
 		GitPushMaxBodyBytes: cfg.GitPushMaxBodyBytes,
+		APIBodyLimitBytes:   cfg.BodyLimitBytes,
+		GitBodyLimitBytes:   cfg.BodyLimitBytes,
 	})
 
 	if cfg.WebhookSecret != "" {

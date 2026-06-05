@@ -73,6 +73,11 @@ type Config struct {
 	// in proxy.MaxDefaultPushBody is 1 MiB. Setting this to 0
 	// disables the cap (not recommended).
 	GitPushMaxBodyBytes int64 `mapstructure:"git_push_max_body_bytes"`
+
+	// BodyLimitBytes is the global request-body cap enforced by the
+	// middleware in proxy.BodyLimit. Zero means use the proxy's
+	// per-path default (16 MiB for /api, 4 MiB for /git).
+	BodyLimitBytes int64 `mapstructure:"body_limit_bytes"`
 }
 
 // GitHubAppConfig holds GitHub App credentials.

@@ -35,6 +35,14 @@ type Deps struct {
 	// push whose body exceeds this cap is rejected with HTTP 413.
 	// Zero or negative means use proxy.MaxDefaultPushBody.
 	GitPushMaxBodyBytes int64
+
+	// APIBodyLimitBytes is the global request-body cap applied to
+	// /api/* routes. Zero means use DefaultAPIBodyBytes.
+	APIBodyLimitBytes int64
+
+	// GitBodyLimitBytes is the global request-body cap applied to
+	// /git/* routes. Zero means use DefaultGitBodyBytes.
+	GitBodyLimitBytes int64
 }
 
 // pushBodyCap returns the effective per-push body cap.
@@ -47,9 +55,23 @@ func (d Deps) pushBodyCap() int64 {
 
 // Register attaches proxy routes to the router.
 func Register(r *gin.Engine, d Deps) {
-	authed := r.Group("/", d.authMiddleware())
-	authed.Any("/git/:org/:repo/*rest", d.gitProxy)
-	authed.Any("/api/repos/:org/:repo/*rest", d.apiProxy)
+	apiLimit := d.APIBodyLimitBytes
+	if apiLimit <= 0 {
+		apiLimit = DefaultAPIBodyBytes
+	}
+	gitLimit := d.GitBodyLimitBytes
+	if gitLimit <= 0 {
+		gitLimit = DefaultGitBodyBytes
+	}
+	// Per-route body limit so the cap can differ for /api/* (16 MiB)
+	// and /git/* (4 MiB). Requests over the cap are rejected with
+	// 413 before the auth middleware runs.
+	apiGroup := r.Group("/api", BodyLimit(apiLimit))
+	gitGroup := r.Group("/git", BodyLimit(gitLimit))
+	authedAPI := apiGroup.Group("/", d.authMiddleware())
+	authedGit := gitGroup.Group("/", d.authMiddleware())
+	authedAPI.Any("/repos/:org/:repo/*rest", d.apiProxy)
+	authedGit.Any("/:org/:repo/*rest", d.gitProxy)
 }
 
 type ctxKey string
