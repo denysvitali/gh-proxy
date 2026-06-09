@@ -328,13 +328,34 @@ func (d Deps) forward(c *gin.Context, target *url.URL, authz string) {
 	d.forwardWithBody(c, target, authz, c.Request.Body)
 }
 
-// forwardGit is forward, but the body is read from the supplied
-// buffer (used by the push handler after the ref-filter check has
-// consumed the body).
+// forwardGit forwards a git smart-HTTP request to upstream.
+//
+// The body is taken from the supplied buffer when one is provided — this
+// is the write path, where the push handler has already drained
+// c.Request.Body into a []byte in order to run the ref-filter check
+// (see gitProxy).
+//
+// When body is nil, the inbound request body is forwarded as-is. This is
+// the read path (GET /info/refs, GET /git-upload-pack), where no
+// buffering has occurred and any body the client sent — even on a GET,
+// in principle — must be preserved end-to-end rather than silently
+// dropped.
+//
+// If both body and c.Request.Body are nil, http.NoBody is used as an
+// explicit no-body sentinel; net/http treats nil and NoBody equivalently
+// on input, but NoBody avoids any nil-deref risk in transport code.
+//
+// Callers must not consume c.Request.Body upstream of this call on the
+// read path; doing so would leave an empty body to forward.
 func (d Deps) forwardGit(c *gin.Context, target *url.URL, authz string, body []byte) {
 	var r io.Reader
-	if body != nil {
+	switch {
+	case body != nil:
 		r = bytes.NewReader(body)
+	case c.Request.Body != nil:
+		r = c.Request.Body
+	default:
+		r = http.NoBody
 	}
 	d.forwardWithBody(c, target, authz, r)
 }
