@@ -41,6 +41,7 @@ func (p *policyReloader) Reload() error {
 		return err
 	}
 	p.engine.Replace(doc)
+	logPolicySummary(p.engine)
 	return nil
 }
 
@@ -150,6 +151,11 @@ func logPolicySummary(e *policy.Engine) {
 
 // Run starts the server and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
+	if s.cfg.PolicyPath != "" {
+		reloader := &policyReloader{path: s.cfg.PolicyPath, engine: s.engine}
+		go watchPolicy(ctx, s.cfg.PolicyPath, reloader.Reload)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		logrus.WithField("addr", s.http.Addr).Info("gh-proxy listening")
