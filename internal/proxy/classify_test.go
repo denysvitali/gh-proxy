@@ -1,13 +1,31 @@
 package proxy
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
 	"github.com/denysvitali/gh-proxy/internal/policy"
+	"github.com/gin-gonic/gin"
 )
+
+type rotatingTokenSource struct {
+	token         string
+	invalidations int
+	requests      int
+}
+
+func (s *rotatingTokenSource) InstallationToken(context.Context, int64) (string, error) {
+	s.requests++
+	return s.token, nil
+}
+
+func (s *rotatingTokenSource) InvalidateInstallation(int64) {
+	s.invalidations++
+}
 
 func TestExtractToken(t *testing.T) {
 	basic := func(s string) string {
@@ -69,6 +87,66 @@ func TestClassifyAPI(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s %s: got %s want %s", c.method, c.rest, got, c.want)
 		}
+	}
+}
+
+func TestShouldRefreshArtifactToken(t *testing.T) {
+	cases := []struct {
+		method string
+		rest   string
+		want   bool
+	}{
+		{http.MethodGet, "/actions/artifacts/123", true},
+		{http.MethodGet, "/actions/artifacts/123/zip", true},
+		{http.MethodHead, "/actions/artifacts/123/zip", true},
+		{http.MethodDelete, "/actions/artifacts/123", false},
+		{http.MethodGet, "/actions/runs/123/artifacts", false},
+	}
+	for _, c := range cases {
+		if got := shouldRefreshArtifactToken(c.method, c.rest); got != c.want {
+			t.Errorf("%s %s: got %v want %v", c.method, c.rest, got, c.want)
+		}
+	}
+}
+
+func TestForwardArtifactRefreshesTokenAndRetries404(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamRequests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
+		if got := r.Header.Get("Authorization"); got == "token stale" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "token fresh" {
+			t.Errorf("unexpected Authorization header %q", got)
+		}
+		w.Header().Set("X-Test-Token", "fresh")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("artifact"))
+	}))
+	defer upstream.Close()
+
+	tokens := &rotatingTokenSource{token: "fresh"}
+	d := Deps{GitHubApp: tokens, HTTPClient: upstream.Client()}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/repos/o/r/actions/artifacts/123?attempt=1", nil)
+	target, err := url.Parse(upstream.URL + "/repos/o/r/actions/artifacts/123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d.forwardArtifact(c, target, 99, "stale")
+
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "artifact" {
+		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get("X-Test-Token") != "fresh" {
+		t.Fatal("fresh response headers were not forwarded")
+	}
+	if upstreamRequests != 2 || tokens.invalidations != 1 || tokens.requests != 1 {
+		t.Fatalf("requests=%d invalidations=%d token requests=%d", upstreamRequests, tokens.invalidations, tokens.requests)
 	}
 }
 

@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -16,16 +17,22 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
-	"github.com/denysvitali/gh-proxy/internal/ghapp"
 	"github.com/denysvitali/gh-proxy/internal/policy"
 	"github.com/denysvitali/gh-proxy/internal/token"
 )
+
+// InstallationTokenSource supplies and invalidates GitHub App installation
+// tokens. The interface keeps proxy request handling independently testable.
+type InstallationTokenSource interface {
+	InstallationToken(context.Context, int64) (string, error)
+	InvalidateInstallation(int64)
+}
 
 // Deps bundles the collaborators needed by handlers.
 type Deps struct {
 	Engine     *policy.Engine
 	Tokens     *token.Verifier
-	GitHubApp  *ghapp.Client
+	GitHubApp  InstallationTokenSource
 	APIBaseURL string
 	GitBaseURL string // e.g. https://github.com
 	HTTPClient *http.Client
@@ -321,7 +328,46 @@ func (d Deps) apiProxy(c *gin.Context) {
 	}
 
 	target, _ := url.Parse(fmt.Sprintf("%s/repos/%s/%s%s", strings.TrimRight(d.APIBaseURL, "/"), org, repo, rest))
+	if shouldRefreshArtifactToken(c.Request.Method, rest) {
+		d.forwardArtifact(c, target, tenant.InstallationID, instToken)
+		return
+	}
 	d.forward(c, target, "token "+instToken)
+}
+
+// forwardArtifact retries a read-only artifact request once with a freshly
+// minted installation token when GitHub answers 404. Installation tokens keep
+// the repository and permission scope they had when they were created, so an
+// otherwise valid cached token can temporarily make a newly granted artifact
+// look absent. A second 404 is forwarded unchanged.
+func (d Deps) forwardArtifact(c *gin.Context, target *url.URL, installationID int64, instToken string) {
+	resp, err := d.doRequest(c, target, "token "+instToken, c.Request.Body)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		d.GitHubApp.InvalidateInstallation(installationID)
+		instToken, err = d.GitHubApp.InstallationToken(c.Request.Context(), installationID)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		resp, err = d.doRequest(c, target, "token "+instToken, http.NoBody)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	d.writeResponse(c, resp)
+}
+
+func shouldRefreshArtifactToken(method, rest string) bool {
+	if method != http.MethodGet && method != http.MethodHead {
+		return false
+	}
+	return strings.HasPrefix(rest, "/actions/artifacts/")
 }
 
 func (d Deps) forward(c *gin.Context, target *url.URL, authz string) {
@@ -361,6 +407,15 @@ func (d Deps) forwardGit(c *gin.Context, target *url.URL, authz string, body []b
 }
 
 func (d Deps) forwardWithBody(c *gin.Context, target *url.URL, authz string, body io.Reader) {
+	resp, err := d.doRequest(c, target, authz, body)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	d.writeResponse(c, resp)
+}
+
+func (d Deps) doRequest(c *gin.Context, target *url.URL, authz string, body io.Reader) (*http.Response, error) {
 	target.RawQuery = c.Request.URL.RawQuery
 	client := d.HTTPClient
 	if client == nil {
@@ -369,8 +424,7 @@ func (d Deps) forwardWithBody(c *gin.Context, target *url.URL, authz string, bod
 
 	out, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target.String(), body)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+		return nil, err
 	}
 	copyHeaders(out.Header, c.Request.Header)
 	out.Header.Set("Authorization", authz)
@@ -378,9 +432,12 @@ func (d Deps) forwardWithBody(c *gin.Context, target *url.URL, authz string, bod
 
 	resp, err := client.Do(out)
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
+		return nil, err
 	}
+	return resp, nil
+}
+
+func (d Deps) writeResponse(c *gin.Context, resp *http.Response) {
 	defer func() { _ = resp.Body.Close() }()
 	copyHeaders(c.Writer.Header(), resp.Header)
 	c.Writer.WriteHeader(resp.StatusCode)
