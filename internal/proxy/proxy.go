@@ -360,6 +360,7 @@ func (d Deps) forwardArtifact(c *gin.Context, target *url.URL, installationID in
 			return
 		}
 	}
+	defer func() { _ = resp.Body.Close() }()
 	d.writeResponse(c, resp)
 }
 
@@ -412,6 +413,7 @@ func (d Deps) forwardWithBody(c *gin.Context, target *url.URL, authz string, bod
 		c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	defer func() { _ = resp.Body.Close() }()
 	d.writeResponse(c, resp)
 }
 
@@ -432,13 +434,15 @@ func (d Deps) doRequest(c *gin.Context, target *url.URL, authz string, body io.R
 
 	resp, err := client.Do(out)
 	if err != nil {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
 		return nil, err
 	}
 	return resp, nil
 }
 
 func (d Deps) writeResponse(c *gin.Context, resp *http.Response) {
-	defer func() { _ = resp.Body.Close() }()
 	copyHeaders(c.Writer.Header(), resp.Header)
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(c.Writer, resp.Body)
